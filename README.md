@@ -64,7 +64,7 @@ Start the Slack Socket Mode connector in a second terminal:
 npm run connector:slack
 ```
 
-The connector opens Slack Socket Mode, acknowledges envelopes, sends supported user message events to `WORKER_AGENT_URL`, and posts generated AI responses back to Slack only when the Worker returns `shouldReply: true`. Channel mentions are answered in a thread, follow-up messages in active bot threads are answered even without a mention, direct messages are answered as normal direct messages, and ignored channel messages are still persisted in the channel session for future context.
+The connector opens Slack Socket Mode, acknowledges envelopes, sends supported user message events to `WORKER_AGENT_URL`, and posts generated AI responses back to Slack only when the Worker returns `shouldReply: true`. Channel mentions are answered in a thread, follow-up messages in active bot threads are answered even without a mention, direct messages are answered in the user's message thread, and ignored channel messages are still persisted in the channel session for future context.
 
 ## VS Code Debugging
 
@@ -83,7 +83,7 @@ Call the Worker agent endpoint directly:
 curl -X POST http://localhost:8787/agent/run \
   -H "Authorization: Bearer $WORKER_CONNECTOR_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"sessionKey":"user-local","text":"Hello from curl","userId":"local","channelId":"DLOCAL","channelType":"im","messageTs":"1760000000.000000","responseRequirement":"always","replyTarget":{"type":"message","channelId":"DLOCAL"}}'
+  -d '{"sessionKey":"user-local","text":"Hello from curl","userId":"local","channelId":"DLOCAL","channelType":"im","messageTs":"1760000000.000000","threadTs":"1760000000.000000","responseRequirement":"always","replyTarget":{"type":"thread","channelId":"DLOCAL","threadTs":"1760000000.000000"}}'
 ```
 
 Check service health:

@@ -20,7 +20,7 @@
 - Tool definitions stay allowlisted in `src/modules/agent/agent.tools.ts`.
 - Use cases must depend on ports such as `src/ports/ai.port.ts`; direct Cloudflare binding access belongs in adapters such as `src/adapters/cloudflare/workers-ai.adapter.ts`.
 - Runtime logs go through `src/ports/logger.port.ts` and `src/adapters/console/console-logger.adapter.ts` so connector, handler, and use case logs share a structured JSON format.
-- The connector answers channel mentions in a thread, answers follow-up messages in active bot threads, and answers direct messages as normal direct messages.
+- The connector answers channel mentions in a thread, answers follow-up messages in active bot threads, and answers direct messages in the user's message thread.
 
 ## Cloudflare And Wrangler
 
