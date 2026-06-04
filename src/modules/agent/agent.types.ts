@@ -3,6 +3,9 @@ import type { AiToolCall } from "../../ports/ai.port";
 export interface RunAgentInput {
   userId?: string;
   channelId?: string;
+  channelType?: string;
+  messageTs?: string;
+  threadTs?: string;
   text: string;
 }
 

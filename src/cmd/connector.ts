@@ -2,19 +2,29 @@ import { Buffer } from "node:buffer";
 import WebSocket, { type RawData } from "ws";
 import { ConsoleLoggerAdapter } from "../adapters/console/console-logger.adapter";
 import {
-  extractAgentInput,
+  extractAgentRoute,
   normalizeSlackConnectionOpenResponse,
   parseSlackEnvelope,
+  type SlackAgentRoute,
   type SlackAgentInput
 } from "../modules/slack/slack-event-mapper";
+import { SlackWebApiClient } from "../modules/slack/slack-web-api.client";
 
 const SLACK_CONNECTION_OPEN_URL = "https://slack.com/api/apps.connections.open";
+const RECENT_SLACK_MESSAGE_TTL_MS = 5 * 60 * 1000;
 const logger = new ConsoleLoggerAdapter();
 
 interface ConnectorConfig {
   slackAppToken: string;
+  slackBotToken: string;
   workerAgentUrl: string;
   workerConnectorToken: string;
+}
+
+interface ConnectorRuntime {
+  botUserId: string;
+  slackWebApi: SlackWebApiClient;
+  recentMessageKeys: Map<string, number>;
 }
 
 interface WorkerAgentResponse {
@@ -32,6 +42,18 @@ void main().catch((error: unknown) => {
 
 async function main(): Promise<void> {
   const config = readConfig();
+  const slackWebApi = new SlackWebApiClient(config.slackBotToken);
+  const botUserId = await slackWebApi.getBotUserId();
+  const runtime: ConnectorRuntime = {
+    botUserId,
+    slackWebApi,
+    recentMessageKeys: new Map()
+  };
+
+  logger.info("slack_connector_bot_identity_resolved", {
+    botUserId
+  });
+
   const connection = await openSlackConnection(config.slackAppToken);
 
   if (!connection.ok || !connection.url) {
@@ -47,7 +69,7 @@ async function main(): Promise<void> {
   });
 
   socket.on("message", (data) => {
-    void handleSocketMessage(data, socket, config).catch((error: unknown) => {
+    void handleSocketMessage(data, socket, config, runtime).catch((error: unknown) => {
       logger.error("slack_connector_message_error", {
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -84,7 +106,8 @@ async function openSlackConnection(token: string) {
 async function handleSocketMessage(
   data: RawData,
   socket: WebSocket,
-  config: ConnectorConfig
+  config: ConnectorConfig,
+  runtime: ConnectorRuntime
 ): Promise<void> {
   const rawMessage = rawDataToString(data);
   const envelope = parseSlackEnvelope(rawMessage);
@@ -108,8 +131,8 @@ async function handleSocketMessage(
     });
   }
 
-  const agentInput = extractAgentInput(envelope.payload);
-  if (!agentInput) {
+  const agentRoute = extractAgentRoute(envelope.payload, runtime.botUserId);
+  if (!agentRoute) {
     logger.info("slack_connector_agent_input_skipped", {
       envelopeType: envelope.type,
       payload: envelope.payload
@@ -117,14 +140,91 @@ async function handleSocketMessage(
     return;
   }
 
-  const response = await callWorkerAgent(config, agentInput);
+  if (isDuplicateSlackMessage(agentRoute, runtime)) {
+    logger.info("slack_connector_agent_input_skipped", {
+      reason: "duplicate_slack_message",
+      input: agentRoute.input,
+      replyTarget: agentRoute.replyTarget
+    });
+    return;
+  }
+
+  if (!(await shouldRespondToRoute(agentRoute, runtime))) {
+    logger.info("slack_connector_agent_input_skipped", {
+      reason: "bot_not_in_thread",
+      replyTarget: agentRoute.replyTarget,
+      input: agentRoute.input
+    });
+    return;
+  }
+
+  const response = await callWorkerAgent(config, agentRoute.input);
   logger.info("slack_connector_agent_response", {
-    channelId: agentInput.channelId,
-    userId: agentInput.userId,
+    channelId: agentRoute.input.channelId,
+    userId: agentRoute.input.userId,
     aiGatewayLogId: response.aiGatewayLogId,
     text: response.text,
     toolCalls: response.toolCalls ?? []
   });
+
+  const slackPost = await runtime.slackWebApi.postMessage(response.text, agentRoute.replyTarget);
+  logger.info("slack_connector_slack_response_sent", {
+    channelId: slackPost.channel,
+    messageTs: slackPost.ts,
+    replyTarget: agentRoute.replyTarget
+  });
+}
+
+function isDuplicateSlackMessage(route: SlackAgentRoute, runtime: ConnectorRuntime): boolean {
+  const messageKey = buildSlackMessageKey(route);
+  if (!messageKey) {
+    return false;
+  }
+
+  const now = Date.now();
+  pruneExpiredMessageKeys(runtime.recentMessageKeys, now);
+
+  if (runtime.recentMessageKeys.has(messageKey)) {
+    return true;
+  }
+
+  runtime.recentMessageKeys.set(messageKey, now);
+  return false;
+}
+
+function buildSlackMessageKey(route: SlackAgentRoute): string | null {
+  if (!route.input.channelId || !route.input.messageTs) {
+    return null;
+  }
+
+  return `${route.input.channelId}:${route.input.messageTs}`;
+}
+
+function pruneExpiredMessageKeys(messageKeys: Map<string, number>, now: number): void {
+  for (const [messageKey, seenAt] of messageKeys) {
+    if (now - seenAt > RECENT_SLACK_MESSAGE_TTL_MS) {
+      messageKeys.delete(messageKey);
+    }
+  }
+}
+
+async function shouldRespondToRoute(
+  route: SlackAgentRoute,
+  runtime: ConnectorRuntime
+): Promise<boolean> {
+  if (route.responseRequirement === "always") {
+    return true;
+  }
+
+  if (route.replyTarget.type !== "thread") {
+    return false;
+  }
+
+  return runtime.slackWebApi.isBotInThread(
+    route.replyTarget.channelId,
+    route.replyTarget.threadTs,
+    runtime.botUserId
+  );
 }
 
 async function callWorkerAgent(
@@ -165,11 +265,13 @@ async function callWorkerAgent(
 
 function readConfig(): ConnectorConfig {
   const slackAppToken = readEnv("SLACK_APP_TOKEN");
+  const slackBotToken = readEnv("SLACK_BOT_TOKEN");
   const workerAgentUrl = readEnv("WORKER_AGENT_URL");
   const workerConnectorToken = readEnv("WORKER_CONNECTOR_TOKEN");
 
   return {
     slackAppToken,
+    slackBotToken,
     workerAgentUrl,
     workerConnectorToken
   };

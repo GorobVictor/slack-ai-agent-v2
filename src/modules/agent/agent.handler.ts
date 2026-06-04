@@ -76,11 +76,17 @@ async function readAgentInput(request: Request): Promise<RunAgentInput | null> {
 
   const userId = readOptionalString(value, "userId");
   const channelId = readOptionalString(value, "channelId");
+  const channelType = readOptionalString(value, "channelType");
+  const messageTs = readOptionalString(value, "messageTs");
+  const threadTs = readOptionalString(value, "threadTs");
 
   return {
     text,
     ...(userId ? { userId } : {}),
-    ...(channelId ? { channelId } : {})
+    ...(channelId ? { channelId } : {}),
+    ...(channelType ? { channelType } : {}),
+    ...(messageTs ? { messageTs } : {}),
+    ...(threadTs ? { threadTs } : {})
   };
 }
 

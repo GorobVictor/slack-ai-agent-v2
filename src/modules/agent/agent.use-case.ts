@@ -114,6 +114,9 @@ export class AgentUseCase {
 function buildMetadata(input: RunAgentInput): Record<string, string> {
   return {
     ...(input.userId ? { slackUserId: input.userId } : {}),
-    ...(input.channelId ? { slackChannelId: input.channelId } : {})
+    ...(input.channelId ? { slackChannelId: input.channelId } : {}),
+    ...(input.channelType ? { slackChannelType: input.channelType } : {}),
+    ...(input.messageTs ? { slackMessageTs: input.messageTs } : {}),
+    ...(input.threadTs ? { slackThreadTs: input.threadTs } : {})
   };
 }
