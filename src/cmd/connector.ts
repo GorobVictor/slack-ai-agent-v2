@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import WebSocket, { type RawData } from "ws";
+import { ConsoleLoggerAdapter } from "../adapters/console/console-logger.adapter";
 import {
   extractAgentInput,
   normalizeSlackConnectionOpenResponse,
@@ -8,6 +9,7 @@ import {
 } from "../modules/slack/slack-event-mapper";
 
 const SLACK_CONNECTION_OPEN_URL = "https://slack.com/api/apps.connections.open";
+const logger = new ConsoleLoggerAdapter();
 
 interface ConnectorConfig {
   slackAppToken: string;
@@ -22,12 +24,9 @@ interface WorkerAgentResponse {
 }
 
 void main().catch((error: unknown) => {
-  console.error(
-    JSON.stringify({
-      event: "slack_connector_fatal_error",
-      error: error instanceof Error ? error.message : "Unknown error"
-    })
-  );
+  logger.error("slack_connector_fatal_error", {
+    error: error instanceof Error ? error.message : "Unknown error"
+  });
   process.exitCode = 1;
 });
 
@@ -44,37 +43,28 @@ async function main(): Promise<void> {
   const socket = new WebSocket(connection.url);
 
   socket.on("open", () => {
-    console.log(JSON.stringify({ event: "slack_connector_socket_open" }));
+    logger.info("slack_connector_socket_open");
   });
 
   socket.on("message", (data) => {
     void handleSocketMessage(data, socket, config).catch((error: unknown) => {
-      console.error(
-        JSON.stringify({
-          event: "slack_connector_message_error",
-          error: error instanceof Error ? error.message : "Unknown error"
-        })
-      );
+      logger.error("slack_connector_message_error", {
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     });
   });
 
   socket.on("close", (code, reason) => {
-    console.log(
-      JSON.stringify({
-        event: "slack_connector_socket_close",
-        code,
-        reason: reason.toString()
-      })
-    );
+    logger.info("slack_connector_socket_close", {
+      code,
+      reason: reason.toString()
+    });
   });
 
   socket.on("error", (error) => {
-    console.error(
-      JSON.stringify({
-        event: "slack_connector_socket_error",
-        error: error.message
-      })
-    );
+    logger.error("slack_connector_socket_error", {
+      error: error.message
+    });
   });
 }
 
@@ -96,38 +86,56 @@ async function handleSocketMessage(
   socket: WebSocket,
   config: ConnectorConfig
 ): Promise<void> {
-  const envelope = parseSlackEnvelope(rawDataToString(data));
+  const rawMessage = rawDataToString(data);
+  const envelope = parseSlackEnvelope(rawMessage);
   if (!envelope) {
-    console.warn(JSON.stringify({ event: "slack_connector_invalid_envelope" }));
+    logger.warn("slack_connector_invalid_envelope", {
+      rawMessage
+    });
     return;
   }
 
+  logger.info("slack_connector_envelope_received", {
+    rawMessage,
+    envelope
+  });
+
   if (envelope.envelope_id) {
-    socket.send(JSON.stringify({ envelope_id: envelope.envelope_id }));
+    const acknowledgement = { envelope_id: envelope.envelope_id };
+    socket.send(JSON.stringify(acknowledgement));
+    logger.info("slack_connector_ack_sent", {
+      acknowledgement
+    });
   }
 
   const agentInput = extractAgentInput(envelope.payload);
   if (!agentInput) {
+    logger.info("slack_connector_agent_input_skipped", {
+      envelopeType: envelope.type,
+      payload: envelope.payload
+    });
     return;
   }
 
   const response = await callWorkerAgent(config, agentInput);
-  console.log(
-    JSON.stringify({
-      event: "slack_connector_agent_response",
-      channelId: agentInput.channelId,
-      userId: agentInput.userId,
-      aiGatewayLogId: response.aiGatewayLogId,
-      text: response.text,
-      toolCalls: response.toolCalls ?? []
-    })
-  );
+  logger.info("slack_connector_agent_response", {
+    channelId: agentInput.channelId,
+    userId: agentInput.userId,
+    aiGatewayLogId: response.aiGatewayLogId,
+    text: response.text,
+    toolCalls: response.toolCalls ?? []
+  });
 }
 
 async function callWorkerAgent(
   config: ConnectorConfig,
   input: SlackAgentInput
 ): Promise<WorkerAgentResponse> {
+  logger.info("slack_connector_worker_request", {
+    url: config.workerAgentUrl,
+    input
+  });
+
   const response = await fetch(config.workerAgentUrl, {
     method: "POST",
     headers: {
@@ -146,6 +154,11 @@ async function callWorkerAgent(
   if (!isWorkerAgentResponse(value)) {
     throw new Error("Worker agent returned an invalid response.");
   }
+
+  logger.info("slack_connector_worker_response", {
+    status: response.status,
+    response: value
+  });
 
   return value;
 }

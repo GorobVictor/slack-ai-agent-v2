@@ -1,40 +1,59 @@
+import { ConsoleLoggerAdapter } from "../../adapters/console/console-logger.adapter";
 import { WorkersAiAdapter } from "../../adapters/cloudflare/workers-ai.adapter";
 import {
   jsonResponse,
   methodNotAllowedResponse,
   unauthorizedResponse
 } from "../../tools/http-response.tool";
+import type { LoggerPort } from "../../ports/logger.port";
 import { AgentUseCase } from "./agent.use-case";
 import type { RunAgentInput } from "./agent.types";
 
 const textEncoder = new TextEncoder();
 
 export async function handleAgentRunRequest(request: Request, env: Env): Promise<Response> {
+  const logger = new ConsoleLoggerAdapter();
+
   if (request.method !== "POST") {
+    logger.warn("agent_handler_method_not_allowed", {
+      method: request.method
+    });
     return methodNotAllowedResponse(["POST"]);
   }
 
-  if (!(await isAuthorized(request, env))) {
+  if (!(await isAuthorized(request, env, logger))) {
+    logger.warn("agent_handler_unauthorized");
     return unauthorizedResponse();
   }
 
   const input = await readAgentInput(request);
   if (!input) {
+    logger.warn("agent_handler_invalid_input");
     return jsonResponse({ error: "Invalid agent input" }, { status: 400 });
   }
+
+  logger.info("agent_handler_input_received", {
+    input
+  });
 
   const ai = new WorkersAiAdapter(env.AI, {
     id: env.AI_GATEWAY_ID,
     collectLogs: readBooleanBinding(env, "AI_GATEWAY_COLLECT_LOGS"),
     source: env.AI_GATEWAY_SOURCE
   });
-  const result = await new AgentUseCase(ai).run(input);
+  const result = await new AgentUseCase(ai, logger).run(input);
 
-  return jsonResponse({
+  const responseBody = {
     text: result.text,
     toolCalls: result.toolCalls,
     ...(result.aiGatewayLogId ? { aiGatewayLogId: result.aiGatewayLogId } : {})
+  };
+
+  logger.info("agent_handler_response_sent", {
+    response: responseBody
   });
+
+  return jsonResponse(responseBody);
 }
 
 async function readAgentInput(request: Request): Promise<RunAgentInput | null> {
@@ -65,10 +84,10 @@ async function readAgentInput(request: Request): Promise<RunAgentInput | null> {
   };
 }
 
-async function isAuthorized(request: Request, env: Env): Promise<boolean> {
+async function isAuthorized(request: Request, env: Env, logger: LoggerPort): Promise<boolean> {
   const expectedToken = readOptionalString(env, "WORKER_CONNECTOR_TOKEN");
   if (!expectedToken) {
-    console.error(JSON.stringify({ event: "agent_auth_secret_missing" }));
+    logger.error("agent_auth_secret_missing");
     return false;
   }
 
