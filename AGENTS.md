@@ -12,12 +12,13 @@
 - This project is a Cloudflare Workers TypeScript template for a Slack Socket Mode AI agent with a local console connector.
 - `src/cmd/worker.ts` is the thin Worker entrypoint and should only route requests, compose dependencies, and return HTTP responses.
 - The Worker exposes `POST /agent/run` through `src/modules/agent/agent.handler.ts` for authenticated connector requests.
-- Slack Socket Mode listening lives in `src/cmd/connector.ts`; it owns the Slack WebSocket connection, acknowledges envelopes, and forwards supported events to the Worker.
-- Slack event parsing and mapping lives in `src/modules/slack/slack-event-mapper.ts`.
+- Slack Socket Mode listening lives in `src/cmd/connector.ts`; it owns the Slack WebSocket connection, acknowledges envelopes, forwards supported events to the Worker, and posts AI replies back to Slack.
+- Slack event parsing and reply routing lives in `src/modules/slack/slack-event-mapper.ts`.
+- Slack Web API calls for bot identity, thread participation checks, and posting replies live in `src/modules/slack/slack-web-api.client.ts`.
 - AI behavior belongs in `src/modules/agent/`, with tool definitions kept allowlisted in `agent.tools.ts`.
 - Use cases must depend on ports such as `src/ports/ai.port.ts`; direct Cloudflare binding access belongs in adapters such as `src/adapters/cloudflare/workers-ai.adapter.ts`.
 - Runtime logs go through `src/ports/logger.port.ts` and `src/adapters/console/console-logger.adapter.ts` so connector, handler, and use case logs share a structured JSON format.
-- The console connector logs Slack envelopes, Worker requests, Worker responses, and generated AI responses. Add real Slack channel replies through a future `MessengerPort` and Slack Web API adapter instead of embedding Slack Web API calls in the use case.
+- The connector answers channel mentions in a thread, answers follow-up messages in bot-involved threads, and answers direct messages as normal direct messages. The Worker agent use case remains stateless for now.
 
 ## Cloudflare And Wrangler
 
@@ -28,6 +29,7 @@
 - Run `npm run cf-typegen` after changing `wrangler.jsonc`; keep `worker-configuration.d.ts` in sync.
 - Keep secrets out of config and source. Use `.env` for local development values and Wrangler secrets for deployed secrets.
 - `SLACK_APP_TOKEN` is required by the local Slack connector and should be an app-level Slack token, usually starting with `xapp-`.
+- `SLACK_BOT_TOKEN` is required by the local Slack connector and should be a bot token, usually starting with `xoxb-`.
 - `WORKER_CONNECTOR_TOKEN` is required by both the connector and Worker `/agent/run` endpoint.
 - AI Gateway logging uses `AI_GATEWAY_ID`, `AI_GATEWAY_COLLECT_LOGS`, and `AI_GATEWAY_SOURCE` from `wrangler.jsonc` vars.
 
