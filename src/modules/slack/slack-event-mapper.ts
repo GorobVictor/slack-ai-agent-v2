@@ -6,7 +6,7 @@ import type {
   SlackSocketEnvelope
 } from "./slack.types";
 
-export type SlackResponseRequirement = "always" | "if_bot_in_thread";
+export type SlackResponseRequirement = "always" | "if_thread_active" | "never";
 
 export type SlackReplyTarget =
   | {
@@ -20,12 +20,15 @@ export type SlackReplyTarget =
     };
 
 export interface SlackAgentInput {
+  sessionKey: string;
   text: string;
   userId?: string;
   channelId?: string;
   channelType?: SlackChannelType;
   messageTs?: string;
   threadTs?: string;
+  replyTarget?: SlackReplyTarget;
+  responseRequirement: SlackResponseRequirement;
 }
 
 export interface SlackAgentRoute {
@@ -80,7 +83,13 @@ export function extractAgentRoute(payload: unknown, botUserId: string): SlackAge
     return null;
   }
 
-  const input: SlackAgentInput = {
+  const sessionKey = buildSessionKey(event);
+  if (!sessionKey) {
+    return null;
+  }
+
+  const baseInput = {
+    sessionKey,
     text,
     ...(event.user ? { userId: event.user } : {}),
     channelId: event.channel,
@@ -90,12 +99,19 @@ export function extractAgentRoute(payload: unknown, botUserId: string): SlackAge
   };
 
   if (event.channel_type === "im") {
+    const replyTarget: SlackReplyTarget = {
+      type: "message",
+      channelId: event.channel
+    };
+    const input: SlackAgentInput = {
+      ...baseInput,
+      replyTarget,
+      responseRequirement: "always"
+    };
+
     return {
       input,
-      replyTarget: {
-        type: "message",
-        channelId: event.channel
-      },
+      replyTarget,
       responseRequirement: "always"
     };
   }
@@ -107,30 +123,49 @@ export function extractAgentRoute(payload: unknown, botUserId: string): SlackAge
       return null;
     }
 
-    return {
-      input,
-      replyTarget: {
-        type: "thread",
-        channelId: event.channel,
-        threadTs
-      },
+    const replyTarget: SlackReplyTarget = {
+      type: "thread",
+      channelId: event.channel,
+      threadTs
+    };
+    const input: SlackAgentInput = {
+      ...baseInput,
+      replyTarget,
       responseRequirement: "always"
     };
+
+    return { input, replyTarget, responseRequirement: "always" };
   }
 
   if (event.thread_ts) {
+    const replyTarget: SlackReplyTarget = {
+      type: "thread",
+      channelId: event.channel,
+      threadTs: event.thread_ts
+    };
+    const input: SlackAgentInput = {
+      ...baseInput,
+      replyTarget,
+      responseRequirement: "if_thread_active"
+    };
+
     return {
       input,
-      replyTarget: {
-        type: "thread",
-        channelId: event.channel,
-        threadTs: event.thread_ts
-      },
-      responseRequirement: "if_bot_in_thread"
+      replyTarget,
+      responseRequirement: "if_thread_active"
     };
   }
 
-  return null;
+  const input: SlackAgentInput = {
+    ...baseInput,
+    responseRequirement: "never"
+  };
+
+  return {
+    input,
+    replyTarget: { type: "message", channelId: event.channel },
+    responseRequirement: "never"
+  };
 }
 
 function extractSlackEvent(payload: unknown): SlackEvent | null {
@@ -152,6 +187,14 @@ function isSupportedMessageEvent(event: SlackEvent | null): event is SlackEvent 
 
 function includesBotMention(text: string, botUserId: string): boolean {
   return new RegExp(`<@${escapeRegExp(botUserId)}(?:\\|[^>]+)?>`).test(text);
+}
+
+function buildSessionKey(event: SlackEvent): string | null {
+  if (event.channel_type === "im") {
+    return event.user ? `user-${event.user}` : null;
+  }
+
+  return event.channel ? `channel-${event.channel}` : null;
 }
 
 function escapeRegExp(value: string): string {

@@ -27,6 +27,7 @@
     "wrangler": "^4.97.0"
   },
   "dependencies": {
+    "agents": "^0.14.1",
     "ws": "^8.21.0"
   }
 }

@@ -43,6 +43,7 @@ export class AgentUseCase {
 
     if (firstResponse.toolCalls.length === 0) {
       const result: RunAgentResult = {
+        shouldReply: true,
         text: firstResponse.text,
         toolCalls: [],
         ...(firstResponse.logId ? { aiGatewayLogId: firstResponse.logId } : {})
@@ -98,6 +99,7 @@ export class AgentUseCase {
     const aiGatewayLogId = followUpResponse.logId ?? firstResponse.logId;
 
     const result: RunAgentResult = {
+      shouldReply: true,
       text: followUpResponse.text,
       toolCalls: firstResponse.toolCalls,
       ...(aiGatewayLogId ? { aiGatewayLogId } : {})

@@ -28,7 +28,9 @@ interface ConnectorRuntime {
 }
 
 interface WorkerAgentResponse {
-  text: string;
+  shouldReply: boolean;
+  text?: string;
+  replyTarget?: SlackAgentRoute["replyTarget"];
   toolCalls?: unknown[];
   aiGatewayLogId?: string;
 }
@@ -149,29 +151,29 @@ async function handleSocketMessage(
     return;
   }
 
-  if (!(await shouldRespondToRoute(agentRoute, runtime))) {
-    logger.info("slack_connector_agent_input_skipped", {
-      reason: "bot_not_in_thread",
-      replyTarget: agentRoute.replyTarget,
-      input: agentRoute.input
-    });
-    return;
-  }
-
   const response = await callWorkerAgent(config, agentRoute.input);
   logger.info("slack_connector_agent_response", {
     channelId: agentRoute.input.channelId,
     userId: agentRoute.input.userId,
+    shouldReply: response.shouldReply,
     aiGatewayLogId: response.aiGatewayLogId,
-    text: response.text,
+    text: response.text ?? "",
     toolCalls: response.toolCalls ?? []
   });
 
-  const slackPost = await runtime.slackWebApi.postMessage(response.text, agentRoute.replyTarget);
+  if (!response.shouldReply) {
+    return;
+  }
+
+  if (!response.text || !response.replyTarget) {
+    throw new Error("Worker agent response is missing text or reply target.");
+  }
+
+  const slackPost = await runtime.slackWebApi.postMessage(response.text, response.replyTarget);
   logger.info("slack_connector_slack_response_sent", {
     channelId: slackPost.channel,
     messageTs: slackPost.ts,
-    replyTarget: agentRoute.replyTarget
+    replyTarget: response.replyTarget
   });
 }
 
@@ -206,25 +208,6 @@ function pruneExpiredMessageKeys(messageKeys: Map<string, number>, now: number):
       messageKeys.delete(messageKey);
     }
   }
-}
-
-async function shouldRespondToRoute(
-  route: SlackAgentRoute,
-  runtime: ConnectorRuntime
-): Promise<boolean> {
-  if (route.responseRequirement === "always") {
-    return true;
-  }
-
-  if (route.replyTarget.type !== "thread") {
-    return false;
-  }
-
-  return runtime.slackWebApi.isBotInThread(
-    route.replyTarget.channelId,
-    route.replyTarget.threadTs,
-    runtime.botUserId
-  );
 }
 
 async function callWorkerAgent(
@@ -299,7 +282,15 @@ function readEnv(key: string): string {
 }
 
 function isWorkerAgentResponse(value: unknown): value is WorkerAgentResponse {
-  if (!isRecord(value) || typeof value.text !== "string") {
+  if (!isRecord(value) || typeof value.shouldReply !== "boolean") {
+    return false;
+  }
+
+  if (value.text !== undefined && typeof value.text !== "string") {
+    return false;
+  }
+
+  if (value.replyTarget !== undefined && !isSlackReplyTarget(value.replyTarget)) {
     return false;
   }
 
@@ -308,6 +299,22 @@ function isWorkerAgentResponse(value: unknown): value is WorkerAgentResponse {
   }
 
   return value.aiGatewayLogId === undefined || typeof value.aiGatewayLogId === "string";
+}
+
+function isSlackReplyTarget(value: unknown): value is SlackAgentRoute["replyTarget"] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (value.type === "message") {
+    return typeof value.channelId === "string";
+  }
+
+  return (
+    value.type === "thread" &&
+    typeof value.channelId === "string" &&
+    typeof value.threadTs === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

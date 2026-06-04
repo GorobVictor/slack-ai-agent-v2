@@ -1,4 +1,5 @@
 import { handleAgentRunRequest } from "../modules/agent/agent.handler";
+export { SlackConversationAgent } from "../modules/agent/slack-conversation.agent";
 import { jsonResponse, notFoundResponse } from "../tools/http-response.tool";
 
 export default {

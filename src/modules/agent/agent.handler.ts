@@ -1,13 +1,14 @@
+import { getAgentByName } from "agents";
 import { ConsoleLoggerAdapter } from "../../adapters/console/console-logger.adapter";
-import { WorkersAiAdapter } from "../../adapters/cloudflare/workers-ai.adapter";
 import {
   jsonResponse,
   methodNotAllowedResponse,
   unauthorizedResponse
 } from "../../tools/http-response.tool";
 import type { LoggerPort } from "../../ports/logger.port";
-import { AgentUseCase } from "./agent.use-case";
-import type { RunAgentInput } from "./agent.types";
+import type { SlackReplyTarget, SlackResponseRequirement } from "../slack/slack-event-mapper";
+import type { RunAgentInput, RunAgentResult } from "./agent.types";
+import type { SlackConversationAgent } from "./slack-conversation.agent";
 
 const textEncoder = new TextEncoder();
 
@@ -36,15 +37,16 @@ export async function handleAgentRunRequest(request: Request, env: Env): Promise
     input
   });
 
-  const ai = new WorkersAiAdapter(env.AI, {
-    id: env.AI_GATEWAY_ID,
-    collectLogs: readBooleanBinding(env, "AI_GATEWAY_COLLECT_LOGS"),
-    source: env.AI_GATEWAY_SOURCE
-  });
-  const result = await new AgentUseCase(ai, logger).run(input);
+  const agent = (await getAgentByName<Env, SlackConversationAgent>(
+    env.SLACK_CONVERSATION_AGENT,
+    input.sessionKey
+  )) as unknown as SlackConversationAgentRpc;
+  const result = await agent.run(input);
 
   const responseBody = {
-    text: result.text,
+    shouldReply: result.shouldReply,
+    ...(result.text ? { text: result.text } : {}),
+    ...(result.replyTarget ? { replyTarget: result.replyTarget } : {}),
     toolCalls: result.toolCalls,
     ...(result.aiGatewayLogId ? { aiGatewayLogId: result.aiGatewayLogId } : {})
   };
@@ -54,6 +56,10 @@ export async function handleAgentRunRequest(request: Request, env: Env): Promise
   });
 
   return jsonResponse(responseBody);
+}
+
+interface SlackConversationAgentRpc {
+  run(input: RunAgentInput): Promise<RunAgentResult>;
 }
 
 async function readAgentInput(request: Request): Promise<RunAgentInput | null> {
@@ -74,19 +80,29 @@ async function readAgentInput(request: Request): Promise<RunAgentInput | null> {
     return null;
   }
 
+  const sessionKey = readOptionalString(value, "sessionKey");
+  const responseRequirement = readResponseRequirement(value);
+  if (!sessionKey || !responseRequirement) {
+    return null;
+  }
+
   const userId = readOptionalString(value, "userId");
   const channelId = readOptionalString(value, "channelId");
   const channelType = readOptionalString(value, "channelType");
   const messageTs = readOptionalString(value, "messageTs");
   const threadTs = readOptionalString(value, "threadTs");
+  const replyTarget = readReplyTarget(value);
 
   return {
+    sessionKey,
     text,
     ...(userId ? { userId } : {}),
     ...(channelId ? { channelId } : {}),
     ...(channelType ? { channelType } : {}),
     ...(messageTs ? { messageTs } : {}),
-    ...(threadTs ? { threadTs } : {})
+    ...(threadTs ? { threadTs } : {}),
+    ...(replyTarget ? { replyTarget } : {}),
+    responseRequirement
   };
 }
 
@@ -120,21 +136,51 @@ async function timingSafeEqual(actual: string, expected: string): Promise<boolea
   return diff === 0;
 }
 
-function readBooleanBinding(env: object, key: string): boolean {
-  const record = env as Record<string, unknown>;
-  const rawValue = record[key];
-
-  if (typeof rawValue === "boolean") {
-    return rawValue;
-  }
-
-  return rawValue === "true";
-}
-
 function readOptionalString(value: object, key: string): string | undefined {
   const record = value as Record<string, unknown>;
   const rawValue = record[key];
   return typeof rawValue === "string" && rawValue.length > 0 ? rawValue : undefined;
+}
+
+function readResponseRequirement(value: object): SlackResponseRequirement | null {
+  const rawValue = readOptionalString(value, "responseRequirement");
+  if (rawValue === "always" || rawValue === "if_thread_active" || rawValue === "never") {
+    return rawValue;
+  }
+
+  return null;
+}
+
+function readReplyTarget(value: object): SlackReplyTarget | undefined {
+  const record = value as Record<string, unknown>;
+  const rawValue = record.replyTarget;
+  if (!isRecord(rawValue)) {
+    return undefined;
+  }
+
+  const type = readOptionalString(rawValue, "type");
+  const channelId = readOptionalString(rawValue, "channelId");
+  if (!channelId) {
+    return undefined;
+  }
+
+  if (type === "message") {
+    return {
+      type,
+      channelId
+    };
+  }
+
+  const threadTs = readOptionalString(rawValue, "threadTs");
+  if (type === "thread" && threadTs) {
+    return {
+      type,
+      channelId,
+      threadTs
+    };
+  }
+
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
