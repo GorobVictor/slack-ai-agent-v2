@@ -1,0 +1,28 @@
+{
+  "name": "slack-ai-agent-v2",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-04",
+  "ai": {
+    "binding": "AI",
+    "remote": true,
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SLACK_SOCKET_SESSION",
+        "class_name": "SlackSocketSession",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SlackSocketSession"],
+    },
+  ],
+  "vars": {
+    "AI_GATEWAY_ID": "default",
+    "AI_GATEWAY_COLLECT_LOGS": true,
+    "AI_GATEWAY_SOURCE": "slack-socket-mode",
+  },
+}
