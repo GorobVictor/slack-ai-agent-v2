@@ -99,12 +99,19 @@ export function extractAgentRoute(payload: unknown, botUserId: string): SlackAge
   };
 
   if (event.channel_type === "im") {
+    const threadTs = event.thread_ts ?? event.ts;
+    if (!threadTs) {
+      return null;
+    }
+
     const replyTarget: SlackReplyTarget = {
-      type: "message",
-      channelId: event.channel
+      type: "thread",
+      channelId: event.channel,
+      threadTs
     };
     const input: SlackAgentInput = {
       ...baseInput,
+      threadTs,
       replyTarget,
       responseRequirement: "always"
     };
