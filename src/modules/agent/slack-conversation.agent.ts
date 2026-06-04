@@ -2,11 +2,13 @@ import { Agent } from "agents";
 import { Session, type SessionMessage } from "agents/experimental/memory/session";
 import { WorkersAiAdapter } from "../../adapters/cloudflare/workers-ai.adapter";
 import { ConsoleLoggerAdapter } from "../../adapters/console/console-logger.adapter";
-import type { AiMessage, GenerateTextInput } from "../../ports/ai.port";
+import type { AiMessage, AiPort, GenerateTextInput } from "../../ports/ai.port";
 import { agentToolDefinitions, executeAgentTool } from "./agent.tools";
 import type { RunAgentInput, RunAgentResult } from "./agent.types";
 
 const DEFAULT_MODEL = "@cf/google/gemma-4-26b-a4b-it";
+const CONTEXT_INTENT_MODEL = "@cf/meta/llama-3.2-1b-instruct";
+const CONTEXT_INTENT_MAX_TOKENS = 96;
 const MAX_HISTORY_MESSAGES = 40;
 const SEARCH_RESULT_LIMIT = 8;
 const SEARCH_CANDIDATE_LIMIT = SEARCH_RESULT_LIMIT * 3;
@@ -27,6 +29,12 @@ type SlackContextScope =
   | { type: "thread"; threadTs: string }
   | { type: "channel" }
   | { type: "default" };
+
+interface SlackContextIntent {
+  scope: SlackContextScope["type"];
+  needsSearch: boolean;
+  reason?: string;
+}
 
 export class SlackConversationAgent extends Agent<Env, SlackConversationAgentState> {
   initialState: SlackConversationAgentState = {
@@ -67,7 +75,8 @@ export class SlackConversationAgent extends Agent<Env, SlackConversationAgentSta
       collectLogs: readBooleanBinding(this.env, "AI_GATEWAY_COLLECT_LOGS"),
       source: this.env.AI_GATEWAY_SOURCE
     });
-    const request = await this.buildGenerateTextInput(input);
+    const contextIntent = await this.classifyContextIntent(ai, input);
+    const request = await this.buildGenerateTextInput(input, contextIntent);
 
     this.logger.info("slack_conversation_agent_ai_first_request", {
       request
@@ -182,11 +191,79 @@ export class SlackConversationAgent extends Agent<Env, SlackConversationAgentSta
     });
   }
 
-  private async buildGenerateTextInput(input: RunAgentInput): Promise<GenerateTextInput> {
-    const contextScope = determineContextScope(input);
+  private async classifyContextIntent(
+    ai: AiPort,
+    input: RunAgentInput
+  ): Promise<SlackContextIntent> {
+    const fallbackIntent = buildFallbackContextIntent(input);
+    const request: GenerateTextInput = {
+      model: CONTEXT_INTENT_MODEL,
+      maxTokens: CONTEXT_INTENT_MAX_TOKENS,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "Classify how a Slack assistant should scope conversation context.",
+            "Return JSON only, without markdown or extra text.",
+            'The JSON shape is {"scope":"thread|channel|default","needsSearch":boolean,"reason":"short reason"}.',
+            "Use scope=channel only when the user explicitly asks for whole/current channel context, all channel messages, all threads, or when a root channel message asks for a channel-wide summary, recap, or history.",
+            "Use scope=thread when the message is in a thread and the user does not explicitly ask for wider channel context.",
+            "Use scope=default for root channel messages that are normal questions and do not ask for channel-wide context.",
+            "Set needsSearch=true for summarize, recap, history, previous, earlier, today, or any channel-wide context request."
+          ].join(" ")
+        },
+        {
+          role: "user",
+          content: [
+            `channelType: ${input.channelType ?? "unknown"}`,
+            `isThreadMessage: ${input.threadTs ? "true" : "false"}`,
+            `threadTs: ${input.threadTs ?? "none"}`,
+            `replyTarget: ${formatReplyTarget(input)}`,
+            `text: ${input.text}`
+          ].join("\n")
+        }
+      ],
+      metadata: {
+        ...buildMetadata(input),
+        slackAiTask: "context_intent"
+      }
+    };
+
+    try {
+      const response = await ai.generateText(request);
+      const parsedIntent = parseContextIntent(response.text);
+      if (!parsedIntent) {
+        this.logger.warn("slack_conversation_agent_context_intent_invalid", {
+          rawText: response.text,
+          fallbackIntent
+        });
+        return fallbackIntent;
+      }
+
+      const intent = normalizeContextIntent(input, parsedIntent);
+      this.logger.info("slack_conversation_agent_context_intent_classified", {
+        rawText: response.text,
+        intent
+      });
+
+      return intent;
+    } catch (error: unknown) {
+      this.logger.warn("slack_conversation_agent_context_intent_failed", {
+        error: error instanceof Error ? error.message : "Unknown error",
+        fallbackIntent
+      });
+      return fallbackIntent;
+    }
+  }
+
+  private async buildGenerateTextInput(
+    input: RunAgentInput,
+    contextIntent: SlackContextIntent
+  ): Promise<GenerateTextInput> {
+    const contextScope = buildContextScope(input, contextIntent);
     const history = await this.session.getHistory();
     const recentMessages = historyToAiMessages(history, contextScope).slice(-MAX_HISTORY_MESSAGES);
-    const searchContext = await this.buildSearchContext(input, contextScope);
+    const searchContext = await this.buildSearchContext(input, contextIntent, contextScope);
 
     return {
       model: DEFAULT_MODEL,
@@ -203,9 +280,10 @@ export class SlackConversationAgent extends Agent<Env, SlackConversationAgentSta
 
   private async buildSearchContext(
     input: RunAgentInput,
+    contextIntent: SlackContextIntent,
     contextScope: SlackContextScope
   ): Promise<string | null> {
-    if (!shouldSearchHistory(input.text)) {
+    if (!contextIntent.needsSearch) {
       return null;
     }
 
@@ -312,22 +390,6 @@ function getSessionMessageText(message: SessionMessage): string {
     .join("\n");
 }
 
-function determineContextScope(input: RunAgentInput): SlackContextScope {
-  if (input.channelType !== "im" && requestsWholeChannelContext(input.text)) {
-    return { type: "channel" };
-  }
-
-  if (input.threadTs) {
-    return { type: "thread", threadTs: input.threadTs };
-  }
-
-  if (input.channelType !== "im" && shouldSearchHistory(input.text)) {
-    return { type: "channel" };
-  }
-
-  return { type: "default" };
-}
-
 function buildScopeSystemMessage(contextScope: SlackContextScope): string {
   if (contextScope.type === "thread") {
     return [
@@ -340,7 +402,8 @@ function buildScopeSystemMessage(contextScope: SlackContextScope): string {
   if (contextScope.type === "channel") {
     return [
       "Current Slack context scope: channel.",
-      "Use the current channel history, including messages from its threads, when answering this request."
+      "Use the current channel history, including messages from its threads, when answering this request.",
+      "Do not claim that you only have access to the current thread."
     ].join(" ");
   }
 
@@ -361,16 +424,108 @@ function contentMatchesScope(content: string, contextScope: SlackContextScope): 
   );
 }
 
-function requestsWholeChannelContext(text: string): boolean {
-  return /whole\s+channel|entire\s+channel|all\s+threads|channel\s+(?:history|context|summary|recap)|summari[sz]e\s+(?:the\s+)?channel|summary\s+(?:of\s+)?(?:the\s+)?channel|весь\s+канал|всього\s+канал|усього\s+канал|по\s+всьому\s+канал|по\s+усьому\s+канал|по\s+канал|всі\s+тред|усі\s+тред|всіх\s+тред|усіх\s+тред/i.test(
-    text
-  );
+function parseContextIntent(text: string): SlackContextIntent | null {
+  const jsonText = extractJsonObjectText(text);
+  if (!jsonText) {
+    return null;
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(jsonText) as unknown;
+  } catch {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const scope = value.scope;
+  const needsSearch = value.needsSearch;
+  if (scope !== "thread" && scope !== "channel" && scope !== "default") {
+    return null;
+  }
+
+  if (typeof needsSearch !== "boolean") {
+    return null;
+  }
+
+  const reason = typeof value.reason === "string" ? value.reason : undefined;
+  return {
+    scope,
+    needsSearch,
+    ...(reason ? { reason } : {})
+  };
 }
 
-function shouldSearchHistory(text: string): boolean {
-  return /summari[sz]e|summary|today|earlier|previous|history|recap|підсум|просум|сьогодні|істор/i.test(
-    text
-  );
+function extractJsonObjectText(text: string): string | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    return null;
+  }
+
+  return text.slice(start, end + 1);
+}
+
+function normalizeContextIntent(
+  input: RunAgentInput,
+  intent: SlackContextIntent
+): SlackContextIntent {
+  if (input.channelType === "im") {
+    return {
+      scope: input.threadTs ? "thread" : "default",
+      needsSearch: intent.needsSearch,
+      ...(intent.reason ? { reason: intent.reason } : {})
+    };
+  }
+
+  if (input.threadTs && intent.scope === "default") {
+    return {
+      scope: "thread",
+      needsSearch: intent.needsSearch,
+      ...(intent.reason ? { reason: intent.reason } : {})
+    };
+  }
+
+  if (intent.scope === "thread" && !input.threadTs) {
+    return {
+      scope: "default",
+      needsSearch: intent.needsSearch,
+      ...(intent.reason ? { reason: intent.reason } : {})
+    };
+  }
+
+  return intent;
+}
+
+function buildFallbackContextIntent(input: RunAgentInput): SlackContextIntent {
+  if (input.threadTs) {
+    return {
+      scope: "thread",
+      needsSearch: true,
+      reason: "fallback_thread_message"
+    };
+  }
+
+  return {
+    scope: "default",
+    needsSearch: false,
+    reason: "fallback_default"
+  };
+}
+
+function buildContextScope(input: RunAgentInput, intent: SlackContextIntent): SlackContextScope {
+  if (intent.scope === "channel" && input.channelType !== "im") {
+    return { type: "channel" };
+  }
+
+  if (intent.scope === "thread" && input.threadTs) {
+    return { type: "thread", threadTs: input.threadTs };
+  }
+
+  return { type: "default" };
 }
 
 function slackTsToDate(value: string): Date {
@@ -407,4 +562,8 @@ function readBooleanBinding(env: object, key: string): boolean {
   }
 
   return rawValue === "true";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

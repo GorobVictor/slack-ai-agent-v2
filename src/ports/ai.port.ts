@@ -30,6 +30,7 @@ export interface GenerateTextInput {
   model: string;
   messages: AiMessage[];
   tools?: AiToolDefinition[];
+  maxTokens?: number;
   metadata?: Record<string, string>;
 }
 

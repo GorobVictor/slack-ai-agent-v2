@@ -23,6 +23,7 @@ export class WorkersAiAdapter implements AiPort {
       {
         messages: input.messages,
         tools: input.tools,
+        ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
         stream: false
       } as never,
       {
