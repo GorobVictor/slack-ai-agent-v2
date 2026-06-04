@@ -1,12 +1,11 @@
 # Slack AI Agent V2
 
-This repository contains a minimal Slack Socket Mode AI agent template built on Cloudflare Workers, Workers AI, Durable Objects, and TypeScript.
+This repository contains a minimal Slack Socket Mode AI agent template built on Cloudflare Workers, Workers AI, a local console connector, and TypeScript.
 
 ## What It Includes
 
-- Slack Socket Mode control endpoints for opening and closing a WebSocket session.
-- A `SlackSocketSession` Durable Object that owns the Slack WebSocket connection.
-- A thin Worker entrypoint that delegates request handling.
+- A local Slack Socket Mode console connector that owns the Slack WebSocket connection.
+- A thin Worker entrypoint with an authenticated `/agent/run` endpoint.
 - A Gemma 4 Workers AI use case with allowlisted tool calling.
 - AI Gateway request logging configured through `wrangler.jsonc` vars.
 - Minimal ESLint and Prettier setup for readable TypeScript.
@@ -26,17 +25,19 @@ Create a local environment file from the example:
 cp .env.example .env
 ```
 
-Set the Slack app-level token as a Wrangler secret:
+Set the Worker connector token as a Wrangler secret before deploying:
 
 ```bash
-npx wrangler secret put SLACK_APP_TOKEN
+npx wrangler secret put WORKER_CONNECTOR_TOKEN
 ```
 
-The token should be a Slack app-level token with Socket Mode support, usually starting with `xapp-`.
+The local connector reads `SLACK_APP_TOKEN`, `WORKER_AGENT_URL`, and `WORKER_CONNECTOR_TOKEN` from `.env`. The Slack token should be an app-level token with Socket Mode support, usually starting with `xapp-`.
 
 ## Development
 
-Run the Worker through Wrangler. Durable Objects run locally in development, while Workers AI still uses Cloudflare's remote AI service:
+The executable entrypoints live under `src/cmd`: `src/cmd/worker.ts` for the Cloudflare Worker and `src/cmd/connector.ts` for the local Slack connector.
+
+Run the Worker through Wrangler. Workers AI uses Cloudflare's remote AI service during local development:
 
 ```bash
 npm run dev
@@ -48,24 +49,32 @@ To use local values from `.env`, pass the env file explicitly:
 npm run dev -- --env-file .env
 ```
 
+Start the Slack Socket Mode connector in a second terminal:
+
+```bash
+npm run connector:slack
+```
+
+The connector opens Slack Socket Mode, acknowledges envelopes, sends supported message events to `WORKER_AGENT_URL`, and prints the Worker response to the console.
+
 ## VS Code Debugging
 
 This repository includes VS Code launch and task configuration:
 
 - Run `Wrangler: Dev` from Run and Debug to start Wrangler with `.env` and inspector port `9229`.
+- Run `Slack Connector: Dev` from Run and Debug to start the console connector with `.env`.
+- Run the `Worker + Slack Connector` compound configuration to start both processes.
 - Run the `wrangler: dev` task to start the same development server from the command palette.
+- Run the `connector: slack` task to start only the Slack connector.
 - Run `wrangler: typegen`, `npm: check`, and `wrangler: deploy` from VS Code tasks when needed.
 
-Open the Slack Socket Mode connection:
+Call the Worker agent endpoint directly:
 
 ```bash
-curl -X POST http://localhost:8787/slack/socket/connect
-```
-
-Close the active Socket Mode connection:
-
-```bash
-curl -X POST http://localhost:8787/slack/socket/disconnect
+curl -X POST http://localhost:8787/agent/run \
+  -H "Authorization: Bearer $WORKER_CONNECTOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello from curl"}'
 ```
 
 Check service health:
@@ -100,8 +109,8 @@ npm run deploy
 
 - Workers AI uses `@cf/google/gemma-4-26b-a4b-it` by default.
 - AI Gateway logging uses `AI_GATEWAY_ID`, `AI_GATEWAY_COLLECT_LOGS`, and `AI_GATEWAY_SOURCE` from `wrangler.jsonc`.
-- Slack Socket Mode events are acknowledged over WebSocket using the received `envelope_id`.
-- The initial template logs generated AI responses. Posting replies back to Slack should be added through a future `MessengerPort` and Slack Web API adapter.
+- Slack Socket Mode events are acknowledged by the console connector using the received `envelope_id`.
+- The connector logs generated AI responses. Posting replies back to Slack should be added through a future `MessengerPort` and Slack Web API adapter.
 
 ## Development Guidance
 
