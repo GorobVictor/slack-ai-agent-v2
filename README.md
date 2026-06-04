@@ -116,7 +116,7 @@ npm run deploy
 
 ## Notes
 
-- Workers AI uses `@cf/google/gemma-4-26b-a4b-it` by default.
+- Workers AI uses `@cf/google/gemma-4-26b-a4b-it` by default for full responses. Slack context intent classification uses `@cf/meta/llama-3.2-1b-instruct` as a cheaper lightweight model.
 - AI Gateway logging uses `AI_GATEWAY_ID`, `AI_GATEWAY_COLLECT_LOGS`, and `AI_GATEWAY_SOURCE` from `wrangler.jsonc`.
 - Slack Socket Mode events are acknowledged by the console connector using the received `envelope_id`.
 - Slack conversation memory lives in `SlackConversationAgent` Durable Object instances. Direct messages use `user-{userId}` session keys and channels use `channel-{channelId}` session keys.
