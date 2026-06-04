@@ -20,6 +20,10 @@ export function methodNotAllowedResponse(allowedMethods: string[]): Response {
   );
 }
 
+export function unauthorizedResponse(): Response {
+  return jsonResponse({ error: "Unauthorized" }, { status: 401 });
+}
+
 export function notFoundResponse(): Response {
   return jsonResponse({ error: "Not found" }, { status: 404 });
 }

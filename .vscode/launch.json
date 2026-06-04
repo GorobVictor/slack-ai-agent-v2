@@ -11,6 +11,23 @@
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
       "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Slack Connector: Dev",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "connector:slack"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Worker + Slack Connector",
+      "configurations": ["Wrangler: Dev", "Slack Connector: Dev"]
     }
   ]
 }

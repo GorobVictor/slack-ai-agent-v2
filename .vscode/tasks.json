@@ -13,6 +13,16 @@
       }
     },
     {
+      "label": "connector: slack",
+      "type": "npm",
+      "script": "connector:slack",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
       "label": "wrangler: typegen",
       "type": "npm",
       "script": "cf-typegen",
