@@ -9,6 +9,7 @@ import type { RunAgentInput, RunAgentResult } from "./agent.types";
 const DEFAULT_MODEL = "@cf/google/gemma-4-26b-a4b-it";
 const MAX_HISTORY_MESSAGES = 40;
 const SEARCH_RESULT_LIMIT = 8;
+const SEARCH_CANDIDATE_LIMIT = SEARCH_RESULT_LIMIT * 3;
 
 const SYSTEM_PROMPT = [
   "You are a concise AI assistant inside Slack.",
@@ -21,6 +22,11 @@ const SYSTEM_PROMPT = [
 interface SlackConversationAgentState {
   activeThreadTs: string[];
 }
+
+type SlackContextScope =
+  | { type: "thread"; threadTs: string }
+  | { type: "channel" }
+  | { type: "default" };
 
 export class SlackConversationAgent extends Agent<Env, SlackConversationAgentState> {
   initialState: SlackConversationAgentState = {
@@ -177,14 +183,16 @@ export class SlackConversationAgent extends Agent<Env, SlackConversationAgentSta
   }
 
   private async buildGenerateTextInput(input: RunAgentInput): Promise<GenerateTextInput> {
+    const contextScope = determineContextScope(input);
     const history = await this.session.getHistory();
-    const recentMessages = historyToAiMessages(history).slice(-MAX_HISTORY_MESSAGES);
-    const searchContext = await this.buildSearchContext(input);
+    const recentMessages = historyToAiMessages(history, contextScope).slice(-MAX_HISTORY_MESSAGES);
+    const searchContext = await this.buildSearchContext(input, contextScope);
 
     return {
       model: DEFAULT_MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: buildScopeSystemMessage(contextScope) },
         ...(searchContext ? [{ role: "system" as const, content: searchContext }] : []),
         ...recentMessages
       ],
@@ -193,20 +201,29 @@ export class SlackConversationAgent extends Agent<Env, SlackConversationAgentSta
     };
   }
 
-  private async buildSearchContext(input: RunAgentInput): Promise<string | null> {
+  private async buildSearchContext(
+    input: RunAgentInput,
+    contextScope: SlackContextScope
+  ): Promise<string | null> {
     if (!shouldSearchHistory(input.text)) {
       return null;
     }
 
     try {
-      const results = await this.session.search(input.text, { limit: SEARCH_RESULT_LIMIT });
-      if (results.length === 0) {
+      const searchLimit =
+        contextScope.type === "thread" ? SEARCH_CANDIDATE_LIMIT : SEARCH_RESULT_LIMIT;
+      const results = await this.session.search(input.text, { limit: searchLimit });
+      const scopedResults = results
+        .filter((result) => contentMatchesScope(result.content, contextScope))
+        .slice(0, SEARCH_RESULT_LIMIT);
+
+      if (scopedResults.length === 0) {
         return null;
       }
 
       return [
         "Relevant searchable Slack history for this request:",
-        ...results.map(
+        ...scopedResults.map(
           (result) => `- ${result.createdAt ?? "unknown time"} ${result.role}: ${result.content}`
         )
       ].join("\n");
@@ -252,8 +269,10 @@ function renderSlackMessageText(
   input: RunAgentInput,
   speaker: "assistant" | "user"
 ): string {
+  const threadTs = resolveEffectiveThreadTs(input) ?? "none";
+
   return [
-    `[Slack metadata: speaker=${speaker}; user=${input.userId ?? "bot"}; channel=${input.channelId ?? "unknown"}; channelType=${input.channelType ?? "unknown"}; messageTs=${input.messageTs ?? "unknown"}; threadTs=${input.threadTs ?? "none"}; shouldReply=${input.responseRequirement}; replyTarget=${formatReplyTarget(input)}]`,
+    `[Slack metadata: speaker=${speaker}; user=${input.userId ?? "bot"}; channel=${input.channelId ?? "unknown"}; channelType=${input.channelType ?? "unknown"}; messageTs=${input.messageTs ?? "unknown"}; threadTs=${threadTs}; shouldReply=${input.responseRequirement}; replyTarget=${formatReplyTarget(input)}]`,
     text
   ].join("\n");
 }
@@ -268,19 +287,84 @@ function formatReplyTarget(input: RunAgentInput): string {
     : `message:${input.replyTarget.channelId}`;
 }
 
-function historyToAiMessages(history: SessionMessage[]): AiMessage[] {
+function historyToAiMessages(
+  history: SessionMessage[],
+  contextScope: SlackContextScope
+): AiMessage[] {
   return history.flatMap((message) => {
     if (message.role !== "user" && message.role !== "assistant") {
       return [];
     }
 
-    const content = message.parts
-      .map((part) => (typeof part.text === "string" ? part.text : ""))
-      .filter(Boolean)
-      .join("\n");
+    const content = getSessionMessageText(message);
+    if (!contentMatchesScope(content, contextScope)) {
+      return [];
+    }
 
     return content ? [{ role: message.role, content }] : [];
   });
+}
+
+function getSessionMessageText(message: SessionMessage): string {
+  return message.parts
+    .map((part) => (typeof part.text === "string" ? part.text : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function determineContextScope(input: RunAgentInput): SlackContextScope {
+  if (input.channelType !== "im" && requestsWholeChannelContext(input.text)) {
+    return { type: "channel" };
+  }
+
+  if (input.threadTs) {
+    return { type: "thread", threadTs: input.threadTs };
+  }
+
+  if (input.channelType !== "im" && shouldSearchHistory(input.text)) {
+    return { type: "channel" };
+  }
+
+  return { type: "default" };
+}
+
+function buildScopeSystemMessage(contextScope: SlackContextScope): string {
+  if (contextScope.type === "thread") {
+    return [
+      `Current Slack context scope: thread ${contextScope.threadTs}.`,
+      "Use only messages from this Slack thread as conversation context.",
+      "Ignore other channel history unless the user explicitly asks for the whole channel."
+    ].join(" ");
+  }
+
+  if (contextScope.type === "channel") {
+    return [
+      "Current Slack context scope: channel.",
+      "Use the current channel history, including messages from its threads, when answering this request."
+    ].join(" ");
+  }
+
+  return [
+    "Current Slack context scope: narrow default.",
+    "Use recent context only as needed, and do not summarize or pull in unrelated channel history unless explicitly requested."
+  ].join(" ");
+}
+
+function contentMatchesScope(content: string, contextScope: SlackContextScope): boolean {
+  if (contextScope.type !== "thread") {
+    return true;
+  }
+
+  return (
+    content.includes(`threadTs=${contextScope.threadTs}`) ||
+    content.includes(`replyTarget=thread:${contextScope.threadTs}`)
+  );
+}
+
+function requestsWholeChannelContext(text: string): boolean {
+  return /whole\s+channel|entire\s+channel|all\s+threads|channel\s+(?:history|context|summary|recap)|summari[sz]e\s+(?:the\s+)?channel|summary\s+(?:of\s+)?(?:the\s+)?channel|весь\s+канал|всього\s+канал|усього\s+канал|по\s+всьому\s+канал|по\s+усьому\s+канал|по\s+канал|всі\s+тред|усі\s+тред|всіх\s+тред|усіх\s+тред/i.test(
+    text
+  );
 }
 
 function shouldSearchHistory(text: string): boolean {
@@ -295,14 +379,23 @@ function slackTsToDate(value: string): Date {
 }
 
 function buildMetadata(input: RunAgentInput): Record<string, string> {
+  const threadTs = resolveEffectiveThreadTs(input);
+
   return {
     slackSessionKey: input.sessionKey,
     ...(input.userId ? { slackUserId: input.userId } : {}),
     ...(input.channelId ? { slackChannelId: input.channelId } : {}),
     ...(input.channelType ? { slackChannelType: input.channelType } : {}),
     ...(input.messageTs ? { slackMessageTs: input.messageTs } : {}),
-    ...(input.threadTs ? { slackThreadTs: input.threadTs } : {})
+    ...(threadTs ? { slackThreadTs: threadTs } : {})
   };
+}
+
+function resolveEffectiveThreadTs(input: RunAgentInput): string | undefined {
+  return (
+    input.threadTs ??
+    (input.replyTarget?.type === "thread" ? input.replyTarget.threadTs : undefined)
+  );
 }
 
 function readBooleanBinding(env: object, key: string): boolean {
