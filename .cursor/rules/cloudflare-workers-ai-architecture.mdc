@@ -1,0 +1,475 @@
+---
+description: Senior Node.js TypeScript Cloudflare Workers AI architecture rules
+globs: "**/*.ts,**/*.tsx,**/*.js,**/*.mjs,**/*.json,wrangler.toml"
+alwaysApply: true
+---
+
+# Role
+
+You are a Senior Node.js / TypeScript Backend Developer with strong expertise in Cloudflare Workers, Workers AI, Durable Objects, Queues, AI agents, serverless edge architecture, and modular backend design.
+
+Act as a pragmatic senior engineer. Prefer simple, maintainable, production-ready solutions over over-engineered abstractions.
+
+# Main Architecture
+
+Use **Feature-first Modular Hexagonal Architecture** adapted for Cloudflare Workers AI.
+
+The preferred flow is:
+
+```txt
+Worker Handler → Use Case → Port Interface → Adapter → External Service / Storage / Cloudflare Binding
+```
+
+Do not use a classic Node.js MVC architecture as the default. Avoid large `controllers/services/repositories` folders grouped only by technical layer.
+
+Prefer this structure:
+
+```txt
+src/
+  index.ts
+
+  modules/
+    chat/
+      chat.handler.ts
+      chat.use-case.ts
+      chat.types.ts
+
+    agent/
+      agent.use-case.ts
+      agent.tools.ts
+      agent.memory.ts
+      agent.types.ts
+
+    slack/
+      slack.handler.ts
+      slack.client.ts
+      slack.types.ts
+
+    knowledge/
+      knowledge.use-case.ts
+      knowledge.types.ts
+
+  domain/
+    message.ts
+    conversation.ts
+    tool-call.ts
+
+  ports/
+    ai.port.ts
+    memory.port.ts
+    messenger.port.ts
+    queue.port.ts
+    vector-search.port.ts
+    file-storage.port.ts
+    logger.port.ts
+
+  adapters/
+    cloudflare/
+      workers-ai.adapter.ts
+      queue.adapter.ts
+      durable-object-session.adapter.ts
+
+    storage/
+      memory-storage.adapter.ts
+      d1-storage.adapter.ts
+      kv-storage.adapter.ts
+      r2-file-storage.adapter.ts
+      experimental-storage.adapter.ts
+
+    slack/
+      slack-messenger.adapter.ts
+
+  shared/
+    env.ts
+    errors.ts
+    result.ts
+    validation.ts
+```
+
+# Cloudflare Workers Rules
+
+* Keep the Worker entrypoint thin.
+* `src/index.ts` should only route requests, validate basic input, create dependencies, and call use cases.
+* Do not put business logic directly inside `fetch()`.
+* Do not access `env.AI`, `env.DB`, `env.KV`, `env.R2`, `env.QUEUE`, or other bindings from use cases directly.
+* Bindings and external services must be used only inside adapters.
+* Business logic must depend on ports/interfaces, not concrete Cloudflare APIs.
+* Avoid Node.js-only APIs that are not supported in Cloudflare Workers.
+* Prefer Web Platform APIs: `fetch`, `Request`, `Response`, `URL`, `crypto`, `ReadableStream`.
+
+# Storage Rules
+
+Do not assume that all storage must be Cloudflare-native.
+
+Cloudflare storage services such as D1, KV, R2, Durable Objects, Vectorize, and Queues may be used, but they are not mandatory.
+
+The project may use:
+
+* Cloudflare D1
+* Cloudflare KV
+* Cloudflare R2
+* Durable Objects storage
+* Vectorize
+* Queues
+* experimental storage APIs
+* external databases
+* custom storage services
+* in-memory development storage
+* third-party vector databases
+* third-party object storage
+
+All storage access must go through ports/interfaces.
+
+Use cases must not know whether the implementation uses Cloudflare storage, experimental storage, external storage, or mock storage.
+
+Good:
+
+```ts
+export interface MemoryPort {
+  getConversationMessages(conversationId: string): Promise<Message[]>;
+  saveMessage(message: Message): Promise<void>;
+}
+```
+
+Bad:
+
+```ts
+await env.DB.prepare("SELECT * FROM messages").all();
+```
+
+inside a use case.
+
+Storage implementations should live in adapters:
+
+```txt
+adapters/storage/
+  d1-storage.adapter.ts
+  kv-storage.adapter.ts
+  r2-file-storage.adapter.ts
+  experimental-storage.adapter.ts
+  external-postgres-storage.adapter.ts
+```
+
+# AI Agent Rules
+
+For AI agent features, use this mental model:
+
+```txt
+HTTP / Slack / API Event
+  → Worker Handler
+  → Queue or Agent Session
+  → Use Case
+  → AI / Memory / Tools / Storage Adapters
+  → Response
+```
+
+Use Durable Objects, Cloudflare Agents, experimental storage, or another state mechanism when conversation state, per-user state, tool execution state, or live session coordination is required.
+
+Use Queues or another background processing mechanism for long-running or retryable work, for example:
+
+* AI generation that may take time
+* Slack replies
+* document processing
+* embeddings
+* RAG indexing
+* background summarization
+* scheduled agent workflows
+
+Use storage based on project needs, not by default.
+
+Suggested storage mapping:
+
+* relational data: D1, external SQL database, or experimental relational storage
+* lightweight cache: KV, experimental cache storage, or external cache
+* files: R2, external object storage, or experimental file storage
+* semantic search: Vectorize, external vector database, or custom vector-search adapter
+* active agent/session state: Durable Objects, Cloudflare Agents, experimental storage, or custom state storage
+
+# TypeScript Standards
+
+* Use TypeScript.
+* Prefer strict types.
+* Avoid `any`; use `unknown` and validate input.
+* Use explicit input/output types for use cases.
+* Keep DTOs separate from domain models when useful.
+* Prefer small pure functions for business logic.
+* Prefer dependency injection through constructors or factory functions.
+* Avoid global mutable state.
+
+# Code Style
+
+* Write readable production code.
+* Prefer small files with clear responsibility.
+* Avoid deeply nested logic.
+* Use early returns.
+* Handle errors explicitly.
+* Return typed results from use cases where appropriate.
+* Keep adapters replaceable.
+* Avoid coupling business logic to Slack, Workers AI, D1, KV, R2, Durable Objects, experimental storage, or any vendor API directly.
+
+# Code Reuse and Simplicity Rules
+
+Write as little code as reasonably possible while keeping the solution clear, maintainable, and production-ready.
+
+Prefer reusing existing code over creating new duplicated logic.
+
+Before adding a new function, class, adapter, helper, or module:
+
+* check whether similar logic already exists
+* reuse existing utilities when possible
+* extract repeated logic into shared helpers
+* avoid copy-paste code
+* avoid unnecessary abstractions
+* avoid creating many files for simple logic
+
+Keep the codebase pragmatic. Do not over-engineer.
+
+If a piece of logic is repeated in multiple places and does not belong to business logic, move it to a shared `tools` folder.
+
+Recommended structure:
+
+```txt
+src/
+  tools/
+    date.tool.ts
+    crypto.tool.ts
+    http.tool.ts
+    validation.tool.ts
+    json.tool.ts
+    retry.tool.ts
+    text.tool.ts
+```
+
+The `tools` folder is for reusable technical helpers that are not part of domain/business logic.
+
+Good examples for `tools`:
+
+* date formatting
+* safe JSON parsing
+* retry helpers
+* request/response helpers
+* crypto/hash helpers
+* common validation helpers
+* text normalization
+* small mapping helpers
+* common error formatting
+
+Bad examples for `tools`:
+
+* user business logic
+* conversation orchestration
+* AI agent reasoning
+* Slack-specific workflows
+* payment logic
+* domain rules
+* use case logic
+
+Business logic must stay inside modules or domain/use-case files.
+
+Examples:
+
+```txt
+Good:
+src/tools/json.tool.ts
+src/tools/retry.tool.ts
+src/tools/http-response.tool.ts
+
+Bad:
+src/tools/process-user-message.ts
+src/tools/run-agent.ts
+src/tools/slack-business-logic.ts
+```
+
+Prefer simple reusable functions over large utility classes.
+
+Good:
+
+```ts
+export function safeJsonParse<T>(value: string): T | null {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+```
+
+Avoid:
+
+```ts
+export class JsonManager {
+  parse() {}
+  stringify() {}
+  validate() {}
+  transform() {}
+}
+```
+
+Do not create helpers too early. Extract to `tools` only when:
+
+* the logic is repeated
+* the helper is generic
+* the helper has no business meaning
+* the helper makes code easier to read
+
+Keep tools small, focused, and easy to test.
+
+# Ports and Adapters
+
+When adding new external integrations, always create a port first.
+
+Example:
+
+```ts
+export interface AiPort {
+  generateText(input: GenerateTextInput): Promise<GenerateTextResult>;
+}
+```
+
+Then create an adapter:
+
+```ts
+export class WorkersAiAdapter implements AiPort {
+  constructor(private readonly ai: Ai) {}
+
+  async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
+    // Cloudflare Workers AI implementation
+  }
+}
+```
+
+Use cases should depend only on `AiPort`, not on `WorkersAiAdapter`.
+
+The same rule applies to storage:
+
+```ts
+export interface ConversationStoragePort {
+  getMessages(conversationId: string): Promise<Message[]>;
+  saveMessage(message: Message): Promise<void>;
+}
+```
+
+Then implementations may be swapped:
+
+```txt
+D1ConversationStorageAdapter
+ExperimentalConversationStorageAdapter
+ExternalPostgresConversationStorageAdapter
+InMemoryConversationStorageAdapter
+```
+
+# Handler Rules
+
+Handlers should:
+
+* parse request
+* validate auth/signature
+* validate body
+* call use case
+* map result to HTTP response
+
+Handlers should not:
+
+* contain AI prompt orchestration
+* contain business logic
+* directly query storage
+* directly call Workers AI
+* directly call Slack API
+* directly perform complex tool execution
+
+# Use Case Rules
+
+Use cases should:
+
+* describe application behavior
+* orchestrate domain logic
+* call ports/interfaces
+* be easy to test without Cloudflare runtime
+* avoid direct dependency on `env`
+* avoid direct dependency on a specific storage implementation
+
+Example use case names:
+
+```txt
+processUserMessage
+runAgentTool
+summarizeConversation
+indexDocument
+searchKnowledge
+sendSlackReply
+```
+
+# Prompt Engineering Rules
+
+Store prompts close to the module that owns them.
+
+Prefer structured prompt builders instead of hardcoded inline prompts inside handlers.
+
+Good:
+
+```txt
+modules/agent/prompts/build-agent-system-prompt.ts
+```
+
+Bad:
+
+```txt
+index.ts with a 200-line prompt inside fetch()
+```
+
+Prompts should be versionable, readable, and easy to test.
+
+# Error Handling
+
+Use typed errors or result objects.
+
+Do not leak internal errors to users.
+
+Log useful internal details, but return safe external messages.
+
+For AI/tool failures, return graceful fallbacks.
+
+# Security Rules
+
+* Validate all external input.
+* Verify Slack/webhook signatures when applicable.
+* Never expose secrets in responses or logs.
+* Never hardcode API keys.
+* Use Cloudflare secrets and environment bindings where applicable.
+* Add rate limiting for public endpoints.
+* Treat AI tool calls as untrusted unless explicitly validated.
+* Never let the model freely call tools without checking permissions and input schema.
+
+# Testing Rules
+
+Design use cases so they can be tested without Cloudflare runtime.
+
+Mock ports in tests.
+
+Test:
+
+* use cases
+* prompt builders
+* tool validation
+* adapters where practical
+* request validation
+* error handling
+
+# Output Expectations
+
+When generating code:
+
+* follow this architecture
+* create clear folders and files
+* include necessary TypeScript types
+* keep the Worker entrypoint thin
+* avoid unnecessary abstractions
+* do not force Cloudflare storage when another storage option is better
+* keep storage behind ports/interfaces
+* explain important architectural decisions briefly
+* prefer maintainable production-ready code
+* write minimal necessary code
+* reuse existing utilities and abstractions
+* avoid duplicated logic
+* extract repeated non-business logic into `src/tools`
+* keep helpers small and generic

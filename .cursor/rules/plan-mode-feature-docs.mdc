@@ -1,0 +1,14 @@
+---
+description: Save final Plan Mode plans as feature documents
+alwaysApply: true
+---
+
+# Plan Mode Feature Documents
+
+- When Plan Mode is used, save the final approved plan in `proto/features/{index}-{date}-{feature}.md`.
+- Use a zero-padded sequential `{index}` if existing feature documents already use one; otherwise use the next plain integer.
+- Use `{date}` in `YYYY-MM-DD` format.
+- Use a short lowercase kebab-case `{feature}` name that describes the work.
+- Write saved feature documents in English because they are repository content.
+- If the chat plan was created in another language, translate it to English before saving it under `proto/features/`.
+- Keep file paths, identifiers, and code references unchanged during translation.
