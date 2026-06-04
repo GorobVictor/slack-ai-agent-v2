@@ -6,7 +6,8 @@ This repository contains a minimal Slack Socket Mode AI agent template built on 
 
 - A local Slack Socket Mode connector that owns the Slack WebSocket connection and posts AI replies back to Slack.
 - A thin Worker entrypoint with an authenticated `/agent/run` endpoint.
-- A Gemma 4 Workers AI use case with allowlisted tool calling.
+- A Cloudflare Agents SDK conversation agent with SQLite-backed Session history.
+- A Gemma 4 Workers AI flow with allowlisted tool calling.
 - Structured JSON console logs for Slack envelopes, Worker requests, AI steps, and tool calls.
 - AI Gateway request logging configured through `wrangler.jsonc` vars.
 - Minimal ESLint and Prettier setup for readable TypeScript.
@@ -38,7 +39,7 @@ The Slack app should have these bot scopes for local reply behavior:
 
 - `app_mentions:read`
 - `chat:write`
-- `channels:history` and/or `groups:history` for thread participation checks
+- `channels:history` and/or `groups:history` for channel message events
 - `im:history` or equivalent direct message event access
 
 ## Development
@@ -63,7 +64,7 @@ Start the Slack Socket Mode connector in a second terminal:
 npm run connector:slack
 ```
 
-The connector opens Slack Socket Mode, acknowledges envelopes, sends supported message events to `WORKER_AGENT_URL`, and posts generated AI responses back to Slack. Channel mentions are answered in a thread, follow-up messages in bot-involved threads are answered even without a mention, and direct messages are answered as normal direct messages.
+The connector opens Slack Socket Mode, acknowledges envelopes, sends supported user message events to `WORKER_AGENT_URL`, and posts generated AI responses back to Slack only when the Worker returns `shouldReply: true`. Channel mentions are answered in a thread, follow-up messages in active bot threads are answered even without a mention, direct messages are answered as normal direct messages, and ignored channel messages are still persisted in the channel session for future context.
 
 ## VS Code Debugging
 
@@ -82,7 +83,7 @@ Call the Worker agent endpoint directly:
 curl -X POST http://localhost:8787/agent/run \
   -H "Authorization: Bearer $WORKER_CONNECTOR_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"text":"Hello from curl"}'
+  -d '{"sessionKey":"user-local","text":"Hello from curl","userId":"local","channelId":"DLOCAL","channelType":"im","messageTs":"1760000000.000000","responseRequirement":"always","replyTarget":{"type":"message","channelId":"DLOCAL"}}'
 ```
 
 Check service health:
@@ -118,7 +119,8 @@ npm run deploy
 - Workers AI uses `@cf/google/gemma-4-26b-a4b-it` by default.
 - AI Gateway logging uses `AI_GATEWAY_ID`, `AI_GATEWAY_COLLECT_LOGS`, and `AI_GATEWAY_SOURCE` from `wrangler.jsonc`.
 - Slack Socket Mode events are acknowledged by the console connector using the received `envelope_id`.
-- Slack thread participation is currently checked with Slack `conversations.replies`; future conversation state can move into Cloudflare Agents session memory.
+- Slack conversation memory lives in `SlackConversationAgent` Durable Object instances. Direct messages use `user-{userId}` session keys and channels use `channel-{channelId}` session keys.
+- Channel sessions store supported user messages even when no Slack reply is sent, so summary-style requests can use prior channel context.
 - Runtime logging goes through `LoggerPort` and the console logger adapter.
 
 ## Development Guidance

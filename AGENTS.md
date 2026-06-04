@@ -14,11 +14,13 @@
 - The Worker exposes `POST /agent/run` through `src/modules/agent/agent.handler.ts` for authenticated connector requests.
 - Slack Socket Mode listening lives in `src/cmd/connector.ts`; it owns the Slack WebSocket connection, acknowledges envelopes, forwards supported events to the Worker, and posts AI replies back to Slack.
 - Slack event parsing and reply routing lives in `src/modules/slack/slack-event-mapper.ts`.
-- Slack Web API calls for bot identity, thread participation checks, and posting replies live in `src/modules/slack/slack-web-api.client.ts`.
-- AI behavior belongs in `src/modules/agent/`, with tool definitions kept allowlisted in `agent.tools.ts`.
+- Slack Web API calls for bot identity and posting replies live in `src/modules/slack/slack-web-api.client.ts`.
+- Slack conversation memory and AI behavior live in `src/modules/agent/slack-conversation.agent.ts`, backed by Cloudflare Agents SDK Session history.
+- Direct messages use `user-{userId}` Agent instances. Channels use `channel-{channelId}` Agent instances and persist supported user messages even when no Slack reply is sent.
+- Tool definitions stay allowlisted in `src/modules/agent/agent.tools.ts`.
 - Use cases must depend on ports such as `src/ports/ai.port.ts`; direct Cloudflare binding access belongs in adapters such as `src/adapters/cloudflare/workers-ai.adapter.ts`.
 - Runtime logs go through `src/ports/logger.port.ts` and `src/adapters/console/console-logger.adapter.ts` so connector, handler, and use case logs share a structured JSON format.
-- The connector answers channel mentions in a thread, answers follow-up messages in bot-involved threads, and answers direct messages as normal direct messages. The Worker agent use case remains stateless for now.
+- The connector answers channel mentions in a thread, answers follow-up messages in active bot threads, and answers direct messages as normal direct messages.
 
 ## Cloudflare And Wrangler
 
@@ -27,6 +29,7 @@
 - Run the Slack connector with `npm run connector:slack` in a separate terminal.
 - Workers AI is configured with `remote: true` because AI bindings always use Cloudflare remote AI resources, even during local development.
 - Run `npm run cf-typegen` after changing `wrangler.jsonc`; keep `worker-configuration.d.ts` in sync.
+- `SLACK_CONVERSATION_AGENT` is a Durable Object binding for `SlackConversationAgent`; keep its SQLite migration in `wrangler.jsonc`.
 - Keep secrets out of config and source. Use `.env` for local development values and Wrangler secrets for deployed secrets.
 - `SLACK_APP_TOKEN` is required by the local Slack connector and should be an app-level Slack token, usually starting with `xapp-`.
 - `SLACK_BOT_TOKEN` is required by the local Slack connector and should be a bot token, usually starting with `xoxb-`.
