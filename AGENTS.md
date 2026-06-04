@@ -19,6 +19,7 @@
 - Slack conversation memory and AI behavior live in `src/modules/agent/slack-conversation.agent.ts`, backed by Cloudflare Agents SDK Session history.
 - Direct messages use `user-{userId}` Agent instances. Channels use `channel-{channelId}` Agent instances and persist supported user messages even when no Slack reply is sent.
 - Direct messages reply in the user's message thread. Channel mentions reply in a thread. Follow-up channel thread messages reply only when the Agent has marked the thread active. Root channel messages without a mention are persisted but return `shouldReply: false`.
+- Channel thread requests use only the current thread context by default. Explicit whole-channel requests, including channel summaries, use the current channel history across root messages and threads.
 - Tool definitions stay allowlisted in `src/modules/agent/agent.tools.ts`.
 - `src/modules/agent/agent.use-case.ts` is legacy/simple AI orchestration from the pre-session flow. The active `/agent/run` path resolves `SlackConversationAgent` with `getAgentByName()`; prefer evolving the Agent path unless intentionally refactoring the older use case.
 - Use cases and Agents should depend on ports such as `src/ports/ai.port.ts`; direct Cloudflare binding access belongs in adapters such as `src/adapters/cloudflare/workers-ai.adapter.ts`.
@@ -31,7 +32,7 @@
 - The connector opens Slack Socket Mode with `SLACK_APP_TOKEN`, resolves the bot identity with `SLACK_BOT_TOKEN`, acknowledges each `envelope_id`, and maps supported Slack user events into `SlackAgentInput`.
 - The connector sends every supported user message to `POST /agent/run` with `Authorization: Bearer <WORKER_CONNECTOR_TOKEN>`.
 - `agent.handler.ts` validates method, bearer token, JSON input, and `replyTarget`, then calls `getAgentByName(env.SLACK_CONVERSATION_AGENT, input.sessionKey)`.
-- `SlackConversationAgent` upserts the Slack message into Session history, decides whether to answer, builds recent/searchable history context, calls Workers AI through `WorkersAiAdapter`, executes allowlisted tools when requested, persists assistant replies, and returns `shouldReply`, text, reply target, tool calls, and optional AI Gateway log id.
+- `SlackConversationAgent` upserts the Slack message into Session history, decides whether to answer, scopes recent/searchable history to the current thread or channel request, calls Workers AI through `WorkersAiAdapter`, executes allowlisted tools when requested, persists assistant replies, and returns `shouldReply`, text, reply target, tool calls, and optional AI Gateway log id.
 - The connector posts to Slack only when the Worker returns `shouldReply: true`.
 
 ## Cloudflare And Wrangler

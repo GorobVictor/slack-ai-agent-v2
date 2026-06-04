@@ -120,7 +120,7 @@ npm run deploy
 - AI Gateway logging uses `AI_GATEWAY_ID`, `AI_GATEWAY_COLLECT_LOGS`, and `AI_GATEWAY_SOURCE` from `wrangler.jsonc`.
 - Slack Socket Mode events are acknowledged by the console connector using the received `envelope_id`.
 - Slack conversation memory lives in `SlackConversationAgent` Durable Object instances. Direct messages use `user-{userId}` session keys and channels use `channel-{channelId}` session keys.
-- Channel sessions store supported user messages even when no Slack reply is sent, so summary-style requests can use prior channel context.
+- Channel sessions store supported user messages even when no Slack reply is sent. Thread requests use the current thread context by default, while explicit whole-channel summaries use prior channel context across root messages and threads.
 - Runtime logging goes through `LoggerPort` and the console logger adapter.
 
 ## Development Guidance
