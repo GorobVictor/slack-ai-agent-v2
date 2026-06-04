@@ -7,6 +7,7 @@ This repository contains a minimal Slack Socket Mode AI agent template built on 
 - A local Slack Socket Mode console connector that owns the Slack WebSocket connection.
 - A thin Worker entrypoint with an authenticated `/agent/run` endpoint.
 - A Gemma 4 Workers AI use case with allowlisted tool calling.
+- Structured JSON console logs for Slack envelopes, Worker requests, AI steps, and tool calls.
 - AI Gateway request logging configured through `wrangler.jsonc` vars.
 - Minimal ESLint and Prettier setup for readable TypeScript.
 
@@ -55,7 +56,7 @@ Start the Slack Socket Mode connector in a second terminal:
 npm run connector:slack
 ```
 
-The connector opens Slack Socket Mode, acknowledges envelopes, sends supported message events to `WORKER_AGENT_URL`, and prints the Worker response to the console.
+The connector opens Slack Socket Mode, acknowledges envelopes, sends supported message events to `WORKER_AGENT_URL`, and writes structured JSON logs for the Slack envelope, Worker request, Worker response, and generated AI response.
 
 ## VS Code Debugging
 
@@ -110,7 +111,7 @@ npm run deploy
 - Workers AI uses `@cf/google/gemma-4-26b-a4b-it` by default.
 - AI Gateway logging uses `AI_GATEWAY_ID`, `AI_GATEWAY_COLLECT_LOGS`, and `AI_GATEWAY_SOURCE` from `wrangler.jsonc`.
 - Slack Socket Mode events are acknowledged by the console connector using the received `envelope_id`.
-- The connector logs generated AI responses. Posting replies back to Slack should be added through a future `MessengerPort` and Slack Web API adapter.
+- Runtime logging goes through `LoggerPort` and the console logger adapter. Posting replies back to Slack should be added through a future `MessengerPort` and Slack Web API adapter.
 
 ## Development Guidance
 

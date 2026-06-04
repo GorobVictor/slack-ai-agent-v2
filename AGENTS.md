@@ -16,7 +16,8 @@
 - Slack event parsing and mapping lives in `src/modules/slack/slack-event-mapper.ts`.
 - AI behavior belongs in `src/modules/agent/`, with tool definitions kept allowlisted in `agent.tools.ts`.
 - Use cases must depend on ports such as `src/ports/ai.port.ts`; direct Cloudflare binding access belongs in adapters such as `src/adapters/cloudflare/workers-ai.adapter.ts`.
-- The console connector logs generated AI responses. Add real Slack channel replies through a future `MessengerPort` and Slack Web API adapter instead of embedding Slack Web API calls in the use case.
+- Runtime logs go through `src/ports/logger.port.ts` and `src/adapters/console/console-logger.adapter.ts` so connector, handler, and use case logs share a structured JSON format.
+- The console connector logs Slack envelopes, Worker requests, Worker responses, and generated AI responses. Add real Slack channel replies through a future `MessengerPort` and Slack Web API adapter instead of embedding Slack Web API calls in the use case.
 
 ## Cloudflare And Wrangler
 
