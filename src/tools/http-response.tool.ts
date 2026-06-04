@@ -4,7 +4,7 @@ export function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 
   return Response.json(body, {
     ...init,
-    headers,
+    headers
   });
 }
 
@@ -14,9 +14,9 @@ export function methodNotAllowedResponse(allowedMethods: string[]): Response {
     {
       status: 405,
       headers: {
-        Allow: allowedMethods.join(", "),
-      },
-    },
+        Allow: allowedMethods.join(", ")
+      }
+    }
   );
 }
 

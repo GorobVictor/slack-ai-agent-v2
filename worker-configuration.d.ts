@@ -5,7 +5,7 @@ interface __BaseEnv_Env {
 	AI: Ai;
 	SLACK_APP_TOKEN: string;
 	AI_GATEWAY_ID: string;
-	AI_GATEWAY_COLLECT_LOGS: boolean;
+	AI_GATEWAY_COLLECT_LOGS: string;
 	AI_GATEWAY_SOURCE: string;
 	SLACK_SOCKET_SESSION: DurableObjectNamespace<import("./src/index").SlackSocketSession>;
 }

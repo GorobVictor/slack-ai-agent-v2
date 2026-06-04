@@ -8,7 +8,7 @@ const SYSTEM_PROMPT = [
   "You are a concise AI assistant inside Slack.",
   "Answer clearly and directly.",
   "Use tools only when they are useful.",
-  "Do not reveal hidden chain-of-thought or internal reasoning.",
+  "Do not reveal hidden chain-of-thought or internal reasoning."
 ].join(" ");
 
 export class AgentUseCase {
@@ -19,17 +19,17 @@ export class AgentUseCase {
       model: DEFAULT_MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: input.text },
+        { role: "user", content: input.text }
       ],
       tools: agentToolDefinitions,
-      metadata: buildMetadata(input),
+      metadata: buildMetadata(input)
     });
 
     if (firstResponse.toolCalls.length === 0) {
       return {
         text: firstResponse.text,
         toolCalls: [],
-        ...(firstResponse.logId ? { aiGatewayLogId: firstResponse.logId } : {}),
+        ...(firstResponse.logId ? { aiGatewayLogId: firstResponse.logId } : {})
       };
     }
 
@@ -41,16 +41,16 @@ export class AgentUseCase {
         { role: "user", content: input.text },
         {
           role: "assistant",
-          content: firstResponse.text || "I need to call a tool before answering.",
+          content: firstResponse.text || "I need to call a tool before answering."
         },
         ...toolResults.map((result) => ({
           role: "tool" as const,
           tool_call_id: result.toolCallId,
-          content: result.content,
-        })),
+          content: result.content
+        }))
       ],
       tools: agentToolDefinitions,
-      metadata: buildMetadata(input),
+      metadata: buildMetadata(input)
     });
 
     const aiGatewayLogId = followUpResponse.logId ?? firstResponse.logId;
@@ -58,7 +58,7 @@ export class AgentUseCase {
     return {
       text: followUpResponse.text,
       toolCalls: firstResponse.toolCalls,
-      ...(aiGatewayLogId ? { aiGatewayLogId } : {}),
+      ...(aiGatewayLogId ? { aiGatewayLogId } : {})
     };
   }
 }
@@ -66,6 +66,6 @@ export class AgentUseCase {
 function buildMetadata(input: RunAgentInput): Record<string, string> {
   return {
     ...(input.userId ? { slackUserId: input.userId } : {}),
-    ...(input.channelId ? { slackChannelId: input.channelId } : {}),
+    ...(input.channelId ? { slackChannelId: input.channelId } : {})
   };
 }

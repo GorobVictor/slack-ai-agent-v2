@@ -10,10 +10,10 @@ export const agentToolDefinitions: AiToolDefinition[] = [
       parameters: {
         type: "object",
         properties: {},
-        additionalProperties: false,
-      },
-    },
-  },
+        additionalProperties: false
+      }
+    }
+  }
 ];
 
 export function executeAgentTool(toolCall: AiToolCall): AgentToolExecutionResult {
@@ -25,7 +25,7 @@ export function executeAgentTool(toolCall: AiToolCall): AgentToolExecutionResult
     toolCallId: toolCall.id,
     name: toolCall.name,
     content: JSON.stringify({
-      now: new Date().toISOString(),
-    }),
+      now: new Date().toISOString()
+    })
   };
 }

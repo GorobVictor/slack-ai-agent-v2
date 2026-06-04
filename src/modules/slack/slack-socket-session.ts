@@ -6,7 +6,7 @@ import type {
   SlackEvent,
   SlackEventsApiPayload,
   SlackSocketControlResult,
-  SlackSocketEnvelope,
+  SlackSocketEnvelope
 } from "./slack.types";
 
 const SLACK_CONNECTION_OPEN_URL = "https://slack.com/api/apps.connections.open";
@@ -28,7 +28,7 @@ export class SlackSocketSession extends DurableObject<Env> {
       return {
         connected: false,
         message:
-          "Missing SLACK_APP_TOKEN secret. Set it with `wrangler secret put SLACK_APP_TOKEN`.",
+          "Missing SLACK_APP_TOKEN secret. Set it with `wrangler secret put SLACK_APP_TOKEN`."
       };
     }
 
@@ -36,7 +36,7 @@ export class SlackSocketSession extends DurableObject<Env> {
     if (!connection.ok || !connection.url) {
       return {
         connected: false,
-        message: `Slack apps.connections.open failed: ${connection.error ?? "missing WebSocket URL"}`,
+        message: `Slack apps.connections.open failed: ${connection.error ?? "missing WebSocket URL"}`
       };
     }
 
@@ -52,8 +52,8 @@ export class SlackSocketSession extends DurableObject<Env> {
         console.error(
           JSON.stringify({
             event: "slack_socket_message_error",
-            error: error instanceof Error ? error.message : "Unknown error",
-          }),
+            error: error instanceof Error ? error.message : "Unknown error"
+          })
         );
       });
     });
@@ -64,8 +64,8 @@ export class SlackSocketSession extends DurableObject<Env> {
           event: "slack_socket_close",
           code: event.code,
           reason: event.reason,
-          wasClean: event.wasClean,
-        }),
+          wasClean: event.wasClean
+        })
       );
       this.socket = undefined;
     });
@@ -111,8 +111,8 @@ export class SlackSocketSession extends DurableObject<Env> {
 
     const ai = new WorkersAiAdapter(this.env.AI, {
       id: this.env.AI_GATEWAY_ID,
-      collectLogs: this.env.AI_GATEWAY_COLLECT_LOGS,
-      source: this.env.AI_GATEWAY_SOURCE,
+      collectLogs: readBooleanBinding(this.env, "AI_GATEWAY_COLLECT_LOGS"),
+      source: this.env.AI_GATEWAY_SOURCE
     });
     const result = await new AgentUseCase(ai).run(agentInput);
 
@@ -122,8 +122,8 @@ export class SlackSocketSession extends DurableObject<Env> {
         channelId: agentInput.channelId,
         userId: agentInput.userId,
         aiGatewayLogId: result.aiGatewayLogId,
-        text: result.text,
-      }),
+        text: result.text
+      })
     );
   }
 
@@ -141,9 +141,9 @@ async function openSlackConnection(token: string): Promise<SlackConnectionOpenRe
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/x-www-form-urlencoded"
     },
-    body: "",
+    body: ""
   });
 
   return normalizeSlackConnectionOpenResponse(await response.json());
@@ -160,7 +160,7 @@ function normalizeSlackConnectionOpenResponse(value: unknown): SlackConnectionOp
   return {
     ok: value.ok === true,
     ...(url ? { url } : {}),
-    ...(error ? { error } : {}),
+    ...(error ? { error } : {})
   };
 }
 
@@ -177,7 +177,7 @@ function parseSlackEnvelope(value: string): SlackSocketEnvelope | null {
       type: parsed.type,
       ...(envelopeId ? { envelope_id: envelopeId } : {}),
       accepts_response_payload: parsed.accepts_response_payload === true,
-      payload: parsed.payload,
+      payload: parsed.payload
     };
   } catch {
     return null;
@@ -185,7 +185,7 @@ function parseSlackEnvelope(value: string): SlackSocketEnvelope | null {
 }
 
 function extractAgentInput(
-  payload: unknown,
+  payload: unknown
 ): { text: string; userId?: string; channelId?: string } | null {
   const event = extractSlackEvent(payload);
   if (!event || event.type !== "message" || event.bot_id || event.subtype) {
@@ -200,7 +200,7 @@ function extractAgentInput(
   return {
     text,
     ...(event.user ? { userId: event.user } : {}),
-    ...(event.channel ? { channelId: event.channel } : {}),
+    ...(event.channel ? { channelId: event.channel } : {})
   };
 }
 
@@ -216,6 +216,17 @@ function extractSlackEvent(payload: unknown): SlackEvent | null {
 function readStringBinding(env: object, key: string): string | undefined {
   const record = env as Record<string, unknown>;
   return readOptionalString(record, key);
+}
+
+function readBooleanBinding(env: object, key: string): boolean {
+  const record = env as Record<string, unknown>;
+  const rawValue = record[key];
+
+  if (typeof rawValue === "boolean") {
+    return rawValue;
+  }
+
+  return rawValue === "true";
 }
 
 function readOptionalString(value: Record<string, unknown>, key: string): string | undefined {

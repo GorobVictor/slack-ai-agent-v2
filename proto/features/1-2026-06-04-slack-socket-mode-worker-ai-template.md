@@ -95,8 +95,8 @@ Use AI Gateway through the Workers AI binding call, with minimal non-secret sett
   "vars": {
     "AI_GATEWAY_ID": "default",
     "AI_GATEWAY_COLLECT_LOGS": true,
-    "AI_GATEWAY_SOURCE": "slack-socket-mode",
-  },
+    "AI_GATEWAY_SOURCE": "slack-socket-mode"
+  }
 }
 ```
 
@@ -108,9 +108,9 @@ await env.AI.run(model, input, {
     id: env.AI_GATEWAY_ID,
     collectLog: env.AI_GATEWAY_COLLECT_LOGS,
     metadata: {
-      source: env.AI_GATEWAY_SOURCE,
-    },
-  },
+      source: env.AI_GATEWAY_SOURCE
+    }
+  }
 });
 ```
 

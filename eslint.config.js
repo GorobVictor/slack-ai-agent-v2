@@ -7,20 +7,20 @@ export default tseslint.config(
       "dist",
       "node_modules",
       "worker-configuration.d.ts",
-      "eslint.config.js",
-    ],
+      "eslint.config.js"
+    ]
   },
   ...tseslint.configs.recommendedTypeChecked,
   {
     languageOptions: {
       parserOptions: {
         project: "./tsconfig.json",
-        tsconfigRootDir: new URL(".", import.meta.url).pathname,
-      },
+        tsconfigRootDir: new URL(".", import.meta.url).pathname
+      }
     },
     rules: {
       "@typescript-eslint/no-floating-promises": "error",
-      "@typescript-eslint/no-explicit-any": "error",
-    },
-  },
+      "@typescript-eslint/no-explicit-any": "error"
+    }
+  }
 );

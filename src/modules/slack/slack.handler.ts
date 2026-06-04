@@ -1,7 +1,7 @@
 import {
   jsonResponse,
   methodNotAllowedResponse,
-  notFoundResponse,
+  notFoundResponse
 } from "../../tools/http-response.tool";
 
 const SOCKET_SESSION_NAME = "default";

@@ -2,7 +2,7 @@ import type {
   AiPort,
   AiToolCall,
   GenerateTextInput,
-  GenerateTextResult,
+  GenerateTextResult
 } from "../../ports/ai.port";
 
 interface WorkersAiGatewayConfig {
@@ -14,7 +14,7 @@ interface WorkersAiGatewayConfig {
 export class WorkersAiAdapter implements AiPort {
   constructor(
     private readonly ai: Ai,
-    private readonly gateway: WorkersAiGatewayConfig,
+    private readonly gateway: WorkersAiGatewayConfig
   ) {}
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
@@ -23,7 +23,7 @@ export class WorkersAiAdapter implements AiPort {
       {
         messages: input.messages,
         tools: input.tools,
-        stream: false,
+        stream: false
       } as never,
       {
         gateway: {
@@ -31,10 +31,10 @@ export class WorkersAiAdapter implements AiPort {
           collectLog: this.gateway.collectLogs,
           metadata: {
             source: this.gateway.source,
-            ...input.metadata,
-          },
-        },
-      } as never,
+            ...input.metadata
+          }
+        }
+      } as never
     );
 
     const normalized = normalizeAiResponse(response);
@@ -42,7 +42,7 @@ export class WorkersAiAdapter implements AiPort {
 
     return {
       ...normalized,
-      ...(logId ? { logId } : {}),
+      ...(logId ? { logId } : {})
     };
   }
 }
@@ -56,7 +56,7 @@ function normalizeAiResponse(response: unknown): Omit<GenerateTextResult, "logId
   if (directResponse) {
     return {
       text: directResponse,
-      toolCalls: normalizeToolCalls(response.tool_calls),
+      toolCalls: normalizeToolCalls(response.tool_calls)
     };
   }
 
@@ -70,7 +70,7 @@ function normalizeAiResponse(response: unknown): Omit<GenerateTextResult, "logId
 
   return {
     text: readOptionalString(message, "content") ?? "",
-    toolCalls: normalizeToolCalls(message.tool_calls),
+    toolCalls: normalizeToolCalls(message.tool_calls)
   };
 }
 
@@ -103,7 +103,7 @@ function normalizeToolCall(value: unknown): AiToolCall | null {
   return {
     id,
     name,
-    arguments: parseToolArguments(rawArguments),
+    arguments: parseToolArguments(rawArguments)
   };
 }
 
