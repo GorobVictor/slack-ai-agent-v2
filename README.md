@@ -1,16 +1,152 @@
 # Slack AI Agent V2
 
-This repository contains a minimal Slack Socket Mode AI agent template built on Cloudflare Workers, Workers AI, a local console connector, and TypeScript.
+Slack AI Agent V2 is a Cloudflare Workers TypeScript Slack agent. A local Node.js Socket Mode connector owns the Slack WebSocket connection, forwards supported Slack events to a Worker endpoint, and posts replies back to Slack. The Worker keeps the HTTP entrypoint thin and delegates conversation behavior to a Cloudflare Agents SDK `SlackConversationAgent` with SQLite-backed Session history and Workers AI.
 
 ## What It Includes
 
-- A local Slack Socket Mode connector that owns the Slack WebSocket connection and posts AI replies back to Slack.
-- A thin Worker entrypoint with an authenticated `/agent/run` endpoint.
-- A Cloudflare Agents SDK conversation agent with SQLite-backed Session history.
-- A Gemma 4 Workers AI flow with allowlisted tool calling.
-- Structured JSON console logs for Slack envelopes, Worker requests, AI steps, and tool calls.
-- AI Gateway request logging configured through `wrangler.jsonc` vars.
-- Minimal ESLint and Prettier setup for readable TypeScript.
+- Local Slack Socket Mode connector in `src/cmd/connector.ts`.
+- Thin Cloudflare Worker entrypoint in `src/cmd/worker.ts`.
+- Authenticated `POST /agent/run` endpoint in `src/modules/agent/agent.handler.ts`.
+- Stateful `SlackConversationAgent` Durable Object in `src/modules/agent/slack-conversation.agent.ts`.
+- Cloudflare Agents SDK Session memory for Slack conversation history.
+- Workers AI responses through `WorkersAiAdapter`, with AI Gateway metadata.
+- Structured LLM context intent classification for thread, channel, or default scope.
+- Allowlisted tool calling from `src/modules/agent/agent.tools.ts`.
+- Structured JSON logs through `LoggerPort` and `ConsoleLoggerAdapter`.
+- Strict TypeScript, ESLint, and Prettier validation.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Slack["Slack Socket Mode"] --> Connector["Local connector\nsrc/cmd/connector.ts"]
+  Connector --> Mapper["Slack event mapper\nslack-event-mapper.ts"]
+  Mapper --> Worker["Cloudflare Worker\nPOST /agent/run"]
+  Worker --> Handler["Agent handler\nagent.handler.ts"]
+  Handler --> Agent["SlackConversationAgent\nDurable Object"]
+  Agent --> Session["Agents SDK Session\nSQLite-backed history"]
+  Agent --> AiAdapter["WorkersAiAdapter"]
+  AiAdapter --> WorkersAI["Workers AI"]
+  AiAdapter --> Gateway["AI Gateway logs"]
+  Agent --> Tools["Allowlisted tools"]
+  Handler --> Connector
+  Connector --> SlackReply["Slack Web API\nchat.postMessage"]
+```
+
+The connector is intentionally outside the Worker. Slack Socket Mode uses a WebSocket connection that the local Node.js process owns. The Worker receives normalized agent requests over HTTP and can later be deployed independently behind the same `/agent/run` contract.
+
+## Runtime Flow
+
+```mermaid
+sequenceDiagram
+  participant Slack
+  participant Connector
+  participant Worker
+  participant Agent as SlackConversationAgent
+  participant Session
+  participant AI as Workers AI
+
+  Slack->>Connector: Socket Mode envelope
+  Connector->>Slack: Acknowledge envelope_id
+  Connector->>Connector: Parse, route, de-duplicate
+  Connector->>Worker: POST /agent/run with bearer token
+  Worker->>Worker: Validate method, token, JSON input
+  Worker->>Agent: getAgentByName(sessionKey).run(input)
+  Agent->>Session: Upsert user message
+  Agent->>Agent: Decide whether to reply
+  alt shouldReply is false
+    Agent-->>Worker: { shouldReply: false }
+    Worker-->>Connector: JSON response
+  else shouldReply is true
+    Agent->>AI: Classify context intent
+    Agent->>Session: Build scoped recent/search history
+    Agent->>AI: Generate answer with allowlisted tools
+    Agent->>Session: Persist assistant reply
+    Agent-->>Worker: { shouldReply: true, text, replyTarget }
+    Worker-->>Connector: JSON response
+    Connector->>Slack: chat.postMessage
+  end
+```
+
+## Slack Behavior
+
+Direct messages use `user-{userId}` Agent instances and always reply in the user's message thread. Channels use `channel-{channelId}` Agent instances. Channel mentions reply in a thread, and follow-up messages in active bot threads can reply without another mention. Root channel messages without a bot mention are persisted for future context but return `shouldReply: false`.
+
+```mermaid
+flowchart TD
+  Event["Supported Slack user message"] --> Type{"DM?"}
+  Type -->|"yes"| Dm["sessionKey=user-{userId}\nresponseRequirement=always\nreplyTarget=thread"]
+  Type -->|"no"| Mention{"Mentions bot?"}
+  Mention -->|"yes"| ChannelMention["sessionKey=channel-{channelId}\nresponseRequirement=always\nreplyTarget=thread"]
+  Mention -->|"no"| Thread{"Inside thread?"}
+  Thread -->|"yes"| FollowUp["responseRequirement=if_thread_active\nreplyTarget=thread"]
+  Thread -->|"no"| Passive["responseRequirement=never\npersist only"]
+```
+
+The connector skips unsupported Slack payloads, bot messages, message subtypes, invalid envelopes, and duplicate Slack messages seen recently.
+
+## Context Scope
+
+`SlackConversationAgent` does not use regex keyword checks to decide whether a request should see thread or channel history. It asks a cheaper Workers AI model for strict JSON context intent, then normalizes the result against Slack placement.
+
+```mermaid
+flowchart TD
+  Input["SlackAgentInput"] --> Save["Upsert user message"]
+  Save --> Reply{"Should reply?"}
+  Reply -->|"no"| Stop["Return shouldReply=false"]
+  Reply -->|"yes"| Classifier["Context intent classifier\n@cf/meta/llama-3.2-1b-instruct"]
+  Classifier --> Json["JSON: scope + needsSearch"]
+  Json --> Normalize["Normalize for DM/root/thread placement"]
+  Normalize --> Scope{"scope"}
+  Scope -->|"thread"| ThreadHistory["Use current thread history"]
+  Scope -->|"channel"| ChannelHistory["Use channel history,\nincluding threads"]
+  Scope -->|"default"| DefaultHistory["Use narrow recent context"]
+  ThreadHistory --> Generate["Main answer\n@cf/google/gemma-4-26b-a4b-it"]
+  ChannelHistory --> Generate
+  DefaultHistory --> Generate
+```
+
+Classifier output has this shape:
+
+```json
+{
+  "scope": "thread",
+  "needsSearch": true,
+  "reason": "user asked about this thread"
+}
+```
+
+If classification fails or returns invalid JSON, the fallback is conservative: thread messages use thread scope with search enabled, and non-thread messages use default scope without search.
+
+## Project Structure
+
+```txt
+src/
+  adapters/
+    cloudflare/workers-ai.adapter.ts
+    console/console-logger.adapter.ts
+  cmd/
+    connector.ts
+    worker.ts
+  modules/
+    agent/
+      agent.handler.ts
+      agent.tools.ts
+      agent.types.ts
+      agent.use-case.ts
+      slack-conversation.agent.ts
+    slack/
+      slack-event-mapper.ts
+      slack-web-api.client.ts
+      slack.types.ts
+  ports/
+    ai.port.ts
+    logger.port.ts
+  tools/
+    http-response.tool.ts
+```
+
+`src/modules/agent/agent.use-case.ts` is legacy/simple orchestration from the pre-session flow. The active Slack runtime path uses `SlackConversationAgent` through `getAgentByName()`.
 
 ## Setup
 
@@ -21,19 +157,25 @@ npm install
 npm run cf-typegen
 ```
 
-Create a local environment file from the example:
+Create a local environment file:
 
 ```bash
 cp .env.example .env
 ```
+
+The local connector reads these values from `.env`:
+
+- `SLACK_APP_TOKEN`: Slack app-level token for Socket Mode, usually `xapp-...`.
+- `SLACK_BOT_TOKEN`: Slack bot token for `auth.test`, `conversations.replies`, and `chat.postMessage`, usually `xoxb-...`.
+- `WORKER_AGENT_URL`: Worker endpoint, normally `http://localhost:8787/agent/run`.
+- `WORKER_CONNECTOR_TOKEN`: shared bearer token used by the connector and Worker.
+- `AI_GATEWAY_ID`, `AI_GATEWAY_COLLECT_LOGS`, and `AI_GATEWAY_SOURCE`: AI Gateway logging metadata.
 
 Set the Worker connector token as a Wrangler secret before deploying:
 
 ```bash
 npx wrangler secret put WORKER_CONNECTOR_TOKEN
 ```
-
-The local connector reads `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `WORKER_AGENT_URL`, and `WORKER_CONNECTOR_TOKEN` from `.env`. `SLACK_APP_TOKEN` should be an app-level token with Socket Mode support, usually starting with `xapp-`. `SLACK_BOT_TOKEN` should be a bot token, usually starting with `xoxb-`.
 
 The Slack app should have these bot scopes for local reply behavior:
 
@@ -44,15 +186,13 @@ The Slack app should have these bot scopes for local reply behavior:
 
 ## Development
 
-The executable entrypoints live under `src/cmd`: `src/cmd/worker.ts` for the Cloudflare Worker and `src/cmd/connector.ts` for the local Slack connector.
-
-Run the Worker through Wrangler. Workers AI uses Cloudflare's remote AI service during local development:
+Run the Worker through Wrangler. Workers AI uses Cloudflare's remote AI service during local development because the AI binding is configured with `remote: true`:
 
 ```bash
 npm run dev
 ```
 
-To use local values from `.env`, pass the env file explicitly:
+To load local values from `.env`, pass the env file explicitly:
 
 ```bash
 npm run dev -- --env-file .env
@@ -63,19 +203,6 @@ Start the Slack Socket Mode connector in a second terminal:
 ```bash
 npm run connector:slack
 ```
-
-The connector opens Slack Socket Mode, acknowledges envelopes, sends supported user message events to `WORKER_AGENT_URL`, and posts generated AI responses back to Slack only when the Worker returns `shouldReply: true`. Channel mentions are answered in a thread, follow-up messages in active bot threads are answered even without a mention, direct messages are answered in the user's message thread, and ignored channel messages are still persisted in the channel session for future context.
-
-## VS Code Debugging
-
-This repository includes VS Code launch and task configuration:
-
-- Run `Wrangler: Dev` from Run and Debug to start Wrangler with `.env` and inspector port `9229`.
-- Run `Slack Connector: Dev` from Run and Debug to start the console connector with `.env`.
-- Run the `Worker + Slack Connector` compound configuration to start both processes.
-- Run the `wrangler: dev` task to start the same development server from the command palette.
-- Run the `connector: slack` task to start only the Slack connector.
-- Run `wrangler: typegen`, `npm: check`, and `wrangler: deploy` from VS Code tasks when needed.
 
 Call the Worker agent endpoint directly:
 
@@ -92,12 +219,43 @@ Check service health:
 curl http://localhost:8787/health
 ```
 
+## VS Code Debugging
+
+This repository includes VS Code launch and task configuration:
+
+- Run `Wrangler: Dev` from Run and Debug to start Wrangler with `.env` and inspector port `9229`.
+- Run `Slack Connector: Dev` from Run and Debug to start the connector with `.env`.
+- Run the `Worker + Slack Connector` compound configuration to start both processes.
+- Run the `wrangler: dev`, `connector: slack`, `wrangler: typegen`, `npm: check`, and `wrangler: deploy` tasks from the command palette when needed.
+
+## Cloudflare Configuration
+
+`wrangler.jsonc` is the source of truth for Worker configuration:
+
+- Worker entrypoint: `src/cmd/worker.ts`.
+- Compatibility flag: `nodejs_compat`.
+- Workers AI binding: `AI` with `remote: true`.
+- Durable Object binding: `SLACK_CONVERSATION_AGENT`.
+- SQLite Durable Object migration for `SlackConversationAgent`.
+- AI Gateway vars: `AI_GATEWAY_ID`, `AI_GATEWAY_COLLECT_LOGS`, and `AI_GATEWAY_SOURCE`.
+
+Run `npm run cf-typegen` after changing `wrangler.jsonc` so `worker-configuration.d.ts` stays in sync.
+
 ## Validation
 
 Run TypeScript, ESLint, and Prettier checks:
 
 ```bash
 npm run check
+```
+
+Useful narrower checks:
+
+```bash
+npm run typecheck:worker
+npm run typecheck:connector
+npm run lint
+npm run format:check
 ```
 
 Format files:
@@ -114,22 +272,18 @@ Deploy with Wrangler:
 npm run deploy
 ```
 
-## Notes
+Before deploying, set secrets with Wrangler rather than committing local env files:
 
-- Workers AI uses `@cf/google/gemma-4-26b-a4b-it` by default for full responses. Slack context intent classification uses `@cf/meta/llama-3.2-1b-instruct` as a cheaper lightweight model.
-- AI Gateway logging uses `AI_GATEWAY_ID`, `AI_GATEWAY_COLLECT_LOGS`, and `AI_GATEWAY_SOURCE` from `wrangler.jsonc`.
-- Slack Socket Mode events are acknowledged by the console connector using the received `envelope_id`.
-- Slack conversation memory lives in `SlackConversationAgent` Durable Object instances. Direct messages use `user-{userId}` session keys and channels use `channel-{channelId}` session keys.
-- Channel sessions store supported user messages even when no Slack reply is sent. Thread requests use the current thread context by default, while explicit whole-channel summaries use prior channel context across root messages and threads.
-- Runtime logging goes through `LoggerPort` and the console logger adapter.
+```bash
+npx wrangler secret put WORKER_CONNECTOR_TOKEN
+```
 
 ## Development Guidance
 
-- Follow the Cursor rules in `.cursor/rules/` for architecture, repository language, and Plan Mode feature documentation.
-- Keep Worker entrypoints thin and place application behavior in feature-first use cases.
+- Keep Worker entrypoints thin and place application behavior in feature-first modules.
 - Keep Cloudflare bindings and external services behind ports and adapters.
+- Keep Slack payload normalization in `src/modules/slack/slack-event-mapper.ts`.
+- Keep Slack Web API calls in `src/modules/slack/slack-web-api.client.ts`.
+- Keep Workers AI calls behind `WorkersAiAdapter`.
+- Keep tool definitions allowlisted in `src/modules/agent/agent.tools.ts`.
 - Write repository content in English unless localized content is the explicit deliverable.
-
-## Local Agent Workflow
-
-Use the local `.cursor/skills/gen-commits` skill when turning uncommitted work into local commits. It groups related changes, uses the required commit subject format, and checks whether `AGENTS.md` and `README.md` need updates before finishing.
